@@ -21,7 +21,7 @@ app.include_router(chat_router)
 @app.get("/")
 def root():
     return {
-        "message": "Welcome to Project Titan 🚀"
+        "message": "Welcome to Project Titan..  🚀"
     }
 
 @app.get("/health")
