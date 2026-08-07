@@ -1,0 +1,6 @@
+{
+  "name": "Bazzix AI Workspace",
+  "description": "An intelligent workspace for thinking, researching, writing, and solving problems with AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
