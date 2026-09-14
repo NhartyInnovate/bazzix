@@ -7,6 +7,8 @@ from app.crud.user import create_user, get_user_by_email
 from app.db.dependencies import get_db
 from app.schemas.user import UserCreate
 from app.core.rate_limit import rate_limiter
+import resend
+from app.core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -68,9 +70,26 @@ def login(
 
 
 def send_reset_email(email: str, token: str):
-    # In a real application, you would integrate SendGrid, Postmark, AWS SES, etc.
-    reset_link = f"http://localhost:5173/reset-password?token={token}"
-    logger.info(f"Password reset requested for {email}. Reset link: {reset_link}")
+    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    
+    if settings.RESEND_API_KEY:
+        try:
+            resend.api_key = settings.RESEND_API_KEY
+            resend.Emails.send({
+                "from": "onboarding@resend.dev",
+                "to": email,
+                "subject": "Reset your Bazzix Password",
+                "html": f"<p>Click <a href='{reset_link}'>here</a> to securely reset your password.</p>"
+            })
+            logger.info(f"Successfully dispatched password reset email to {email} via Resend")
+        except Exception as e:
+            logger.error(f"Failed to send email via Resend: {e}")
+    else:
+        # Fallback for local development when no API key is provided
+        print("\n" + "="*50)
+        print(f"PASSWORD RESET REQUESTED FOR: {email}")
+        print(f"RESET LINK: {reset_link}")
+        print("="*50 + "\n")
 
 
 @router.post("/forgot-password", dependencies=[Depends(rate_limiter(limit=3, window=60))])

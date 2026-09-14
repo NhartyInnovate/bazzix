@@ -14,6 +14,8 @@ class Settings:
     )
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080").rstrip("/")
     ALLOWED_ORIGINS = [
         origin.strip()
         for origin in os.getenv(
