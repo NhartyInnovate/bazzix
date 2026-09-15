@@ -69,8 +69,11 @@ def login(
     }
 
 
+from app.services.email import get_password_reset_template
+
 def send_reset_email(email: str, token: str):
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    html_content = get_password_reset_template(reset_link)
     
     if settings.RESEND_API_KEY:
         try:
@@ -79,7 +82,7 @@ def send_reset_email(email: str, token: str):
                 "from": "onboarding@resend.dev",
                 "to": email,
                 "subject": "Reset your Bazzix Password",
-                "html": f"<p>Click <a href='{reset_link}'>here</a> to securely reset your password.</p>"
+                "html": html_content
             })
             logger.info(f"Successfully dispatched password reset email to {email} via Resend")
         except Exception as e:
