@@ -90,15 +90,14 @@ class TestCreditManager(unittest.TestCase):
         req = AIRequestLog(id=1, user_id=self.user.id, conversation_id=1, client_request_id="cli1", provider="openai", model="gpt-4.1-mini")
         
         # We need the pricing config to calculate the charge. 
-        # Using Dummy provider: prompt 0.15, comp 0.6. 
-        # Say 10 prompt tokens, 10 comp tokens. Cost = (10*150 + 10*600) / 10^9 = very small.
-        # Credit exchange rate is 10.0 (from setUp).
-        # Actually, let's just assert it charges *something* and releases correctly.
+        # Using configured provider: prompt 0.0000004, comp 0.0000016
+        # Say 1000 prompt tokens, 1000 comp tokens. Cost is small.
+        # It will hit the minimum charge of 10 credits.
         finalize_and_settle_credits(
             self.db, req, 
             status=RequestStatus.COMPLETED,
-            prompt_tokens=1000000, # Large enough to charge something
-            completion_tokens=1000000,
+            prompt_tokens=1000,
+            completion_tokens=1000,
             cached_tokens=0,
             usage_source=UsageSource.PROVIDER
         )
