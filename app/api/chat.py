@@ -13,6 +13,7 @@ from app.schemas.message import (
 
 from app.services.chat import process_chat, process_chat_stream
 from app.services.ai_request import DuplicateRequestError
+from app.services.credit_manager import InsufficientCreditsError
 from app.core.rate_limit import rate_limiter
 
 router = APIRouter(
@@ -87,8 +88,6 @@ async def chat_stream(
                 yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
 
         return StreamingResponse(sse_event_generator(), media_type="text/event-stream")
-
-    from app.services.credit_manager import InsufficientCreditsError
 
     except ValueError as e:
         raise HTTPException(
