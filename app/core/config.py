@@ -26,6 +26,9 @@ class Settings:
     ]
     MAX_INPUT_TOKENS = int(os.getenv("MAX_INPUT_TOKENS", 100000))
     MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", 4000))
+    
+    # Payment Provider Configuration
+    PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
 
 
 settings = Settings()
