@@ -58,10 +58,7 @@ class TestWebhooksAPI(unittest.TestCase):
         self.db.commit()
 
         def override_get_db():
-            try:
-                yield self.db
-            finally:
-                self.db.close()
+            yield self.db
 
         app.dependency_overrides[get_db] = override_get_db
         self.client = TestClient(app)
