@@ -15,6 +15,11 @@ def create_user(db: Session, user: UserCreate):
     )
 
     db.add(db_user)
+    db.flush()
+
+    from app.services.account_provisioning import provision_new_user_account
+    provision_new_user_account(db, db_user.id)
+
     db.commit()
     db.refresh(db_user)
 
