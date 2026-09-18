@@ -96,6 +96,7 @@ def fulfill_purchase(
     verified_amount: int = None,
     verified_currency: str = None,
     provider_transaction_id: str = None,
+    paid_at: datetime.datetime = None,
 ) -> Purchase:
     """Fulfills a PENDING purchase, verifying the amount/currency if supplied, and allocates credits."""
     try:
@@ -131,7 +132,7 @@ def fulfill_purchase(
             db.add(tx)
 
             purchase.status = PurchaseStatus.SUCCESS
-            purchase.paid_at = func.now()
+            purchase.paid_at = paid_at if paid_at is not None else func.now()
             if provider_transaction_id:
                 purchase.provider_transaction_id = provider_transaction_id
 
