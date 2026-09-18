@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, UniqueConstraint
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -15,6 +15,8 @@ class TransactionType(enum.Enum):
     PURCHASE = "PURCHASE"
     ADJUSTMENT = "ADJUSTMENT"
     RESERVATION_RELEASE = "RESERVATION_RELEASE"
+    SUBSCRIPTION_ALLOCATION = "SUBSCRIPTION_ALLOCATION"
+    EXPIRY = "EXPIRY"
 
 
 class LedgerTransaction(Base):
@@ -45,4 +47,7 @@ class LedgerTransaction(Base):
     wallet = relationship(
         "Wallet",
         back_populates="transactions",
+    )
+    __table_args__ = (
+        UniqueConstraint('transaction_type', 'reference_id', name='uq_ledger_tx_ref'),
     )
