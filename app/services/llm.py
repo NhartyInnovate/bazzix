@@ -55,18 +55,22 @@ async def generate_chat_response(contents: list[dict], system_instruction: str) 
         raise RuntimeError(f"OpenAI API Error: {str(e)}")
 
 
-async def generate_chat_response_stream(contents: list[dict], system_instruction: str):
+async def generate_chat_response_stream(contents: list[dict], system_instruction: str, max_completion_tokens: int = None):
     if client is None:
         last_message = ""
         if contents:
             last_message = contents[-1].get("content", "")
         mock_response = f"This is a mock AI response. (Bazzix running in Mock Mode - OPENAI_API_KEY not configured).\n\nYou said: {last_message[:100]}..."
         
+        yield {"type": "metadata", "provider_request_id": "mock-req-id"}
+        
         # Stream mock response with simulated delay
         words = mock_response.split(" ")
         for i, word in enumerate(words):
-            yield (word + " ") if i < len(words) - 1 else word
+            yield {"type": "content", "content": (word + " ") if i < len(words) - 1 else word}
             await asyncio.sleep(0.05)
+            
+        yield {"type": "usage", "provider_request_id": "mock-req-id", "prompt_tokens": 15, "completion_tokens": len(words)}
         return
 
     try:
@@ -74,16 +78,34 @@ async def generate_chat_response_stream(contents: list[dict], system_instruction
             {"role": "system", "content": system_instruction}
         ] + contents
 
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=messages,
-            stream=True
-        )
+        kwargs = {
+            "model": settings.OPENAI_MODEL,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True}
+        }
+        if max_completion_tokens is not None:
+            kwargs["max_completion_tokens"] = max_completion_tokens
 
+        response = await client.chat.completions.create(**kwargs)
+
+        first_chunk = True
         async for chunk in response:
+            if first_chunk:
+                yield {"type": "metadata", "provider_request_id": chunk.id}
+                first_chunk = False
+                
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                yield {"type": "content", "content": chunk.choices[0].delta.content}
                 await asyncio.sleep(0.02)
+                
+            if chunk.usage:
+                yield {
+                    "type": "usage",
+                    "provider_request_id": chunk.id,
+                    "prompt_tokens": chunk.usage.prompt_tokens,
+                    "completion_tokens": chunk.usage.completion_tokens,
+                }
 
     except Exception as e:
         raise RuntimeError(f"OpenAI API Error: {str(e)}")

@@ -24,6 +24,8 @@ class Settings:
         ).split(",")
         if origin.strip()
     ]
+    MAX_INPUT_TOKENS = int(os.getenv("MAX_INPUT_TOKENS", 100000))
+    MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", 4000))
 
 
 settings = Settings()

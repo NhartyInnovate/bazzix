@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
+    client_request_id: str = Field(..., description="Idempotency key for the request")
     conversation_id: int
     message: str = Field(..., min_length=1, max_length=5000, description="Message content must be between 1 and 5000 characters.")
 

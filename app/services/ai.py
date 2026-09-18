@@ -9,5 +9,5 @@ async def structured_chat(contents: list[dict], system_instruction: str):
     return await generate_chat_response(contents, system_instruction)
 
 
-def structured_chat_stream(contents: list[dict], system_instruction: str):
-    return generate_chat_response_stream(contents, system_instruction)
+def structured_chat_stream(contents: list[dict], system_instruction: str, max_completion_tokens: int = None):
+    return generate_chat_response_stream(contents, system_instruction, max_completion_tokens)

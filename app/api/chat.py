@@ -12,6 +12,7 @@ from app.schemas.message import (
 )
 
 from app.services.chat import process_chat, process_chat_stream
+from app.services.ai_request import DuplicateRequestError
 from app.core.rate_limit import rate_limiter
 
 router = APIRouter(
@@ -71,6 +72,7 @@ async def chat_stream(
             current_user.id,
             request.conversation_id,
             request.message,
+            request.client_request_id,
         )
 
         async def sse_event_generator():
@@ -86,9 +88,23 @@ async def chat_stream(
 
         return StreamingResponse(sse_event_generator(), media_type="text/event-stream")
 
+    from app.services.credit_manager import InsufficientCreditsError
+
     except ValueError as e:
         raise HTTPException(
             status_code=404,
+            detail=str(e)
+        )
+
+    except DuplicateRequestError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e)
+        )
+        
+    except InsufficientCreditsError as e:
+        raise HTTPException(
+            status_code=402,
             detail=str(e)
         )
 

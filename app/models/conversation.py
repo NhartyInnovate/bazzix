@@ -41,3 +41,9 @@ class Conversation(Base):
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
+
+    ai_requests = relationship(
+        "AIRequestLog",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )
