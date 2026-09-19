@@ -70,6 +70,30 @@ class TestPaystackProvider(unittest.TestCase):
         self.provider.initialize_transaction(25000, "NGN", "t@e.com", "ref-25000")
         self.assertEqual(mock_post.call_args[1]["json"]["amount"], 2500000)
 
+    @patch("app.services.paystack.requests.post")
+    def test_initialize_with_callback_url(self, mock_post):
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "status": True,
+            "data": {
+                "authorization_url": "url",
+                "reference": "ref"
+            }
+        }
+        mock_post.return_value = mock_response
+
+        self.provider.initialize_transaction(
+            amount=1500,
+            currency="NGN",
+            email="test@example.com",
+            reference="tx-12345",
+            callback_url="https://frontend.com/payment/verify"
+        )
+
+        args, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["json"]["callback_url"], "https://frontend.com/payment/verify")
+
     def test_initialize_validation_errors(self):
         # Negative amount
         with self.assertRaises(PaymentInitializationError):

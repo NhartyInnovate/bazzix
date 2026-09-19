@@ -55,14 +55,18 @@ def checkout(
         )
 
     # 4. Initialize Paystack Transaction
+    from app.core.config import settings
     provider = PaystackProvider()
-    
+
+    callback_url = f"{settings.FRONTEND_URL}/payment/verify"
+
     try:
         result = provider.initialize_transaction(
             amount=purchase.price_amount,
             currency=purchase.price_currency,
             email=current_user.email,
-            reference=purchase.payment_reference
+            reference=purchase.payment_reference,
+            callback_url=callback_url
         )
     except PaymentInitializationError as e:
         logger.error(f"Payment provider initialization failed: {e}")
@@ -94,13 +98,13 @@ def get_purchase_status(
     purchase = db.query(Purchase).filter(
         Purchase.payment_reference == reference
     ).first()
-    
+
     if not purchase or purchase.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Purchase not found."
         )
-        
+
     return PurchaseStatusResponse(
         reference=purchase.payment_reference,
         status=purchase.status.name

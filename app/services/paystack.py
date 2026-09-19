@@ -46,7 +46,8 @@ class PaystackProvider(PaymentProvider):
         amount: int, 
         currency: str, 
         email: str, 
-        reference: str
+        reference: str,
+        callback_url: str = None
     ) -> PaymentInitializationResult:
         try:
             amount = self._validate_amount(amount)
@@ -66,6 +67,8 @@ class PaystackProvider(PaymentProvider):
             "currency": currency,
             "reference": reference
         }
+        if callback_url:
+            payload["callback_url"] = callback_url
 
         try:
             response = requests.post(

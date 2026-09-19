@@ -83,19 +83,26 @@ class TestCheckoutAPI(unittest.TestCase):
         self.assertEqual(data["reference"], "bazzix_fake_uuid")
         self.assertEqual(data["provider"], "paystack")
 
+        # Verify callback_url is passed correctly
+        from app.core.config import settings
+        expected_callback = f"{settings.FRONTEND_URL}/payment/verify"
+        mock_provider.initialize_transaction.assert_called_once()
+        kwargs = mock_provider.initialize_transaction.call_args[1]
+        self.assertEqual(kwargs["callback_url"], expected_callback)
+
         # Verify DB Purchase
         purchase = self.db.query(Purchase).first()
         self.assertIsNotNone(purchase)
         self.assertEqual(purchase.status, PurchaseStatus.PENDING)
         self.assertEqual(purchase.product_id, "credit_small")
         self.assertEqual(purchase.user_id, self.user.id)
-        
         # Verify provider called with exact snapshot values
         mock_provider.initialize_transaction.assert_called_once_with(
             amount=1500,
             currency="NGN",
-            email="test@example.com",
-            reference=purchase.payment_reference
+            email=self.user.email,
+            reference=purchase.payment_reference,
+            callback_url=expected_callback
         )
 
     def test_checkout_invalid_product(self):

@@ -67,7 +67,8 @@ class PaymentProvider(ABC):
         amount: int, 
         currency: str, 
         email: str, 
-        reference: str
+        reference: str,
+        callback_url: str = None
     ) -> PaymentInitializationResult:
         """
         Initializes a payment transaction with the external provider.
