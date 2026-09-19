@@ -6,6 +6,7 @@ load_dotenv()
 
 
 class Settings:
+    ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     DATABASE_URL = os.getenv("DATABASE_URL")
     SECRET_KEY = os.getenv("SECRET_KEY")
     ALGORITHM = os.getenv("ALGORITHM", "HS256")

@@ -88,11 +88,14 @@ def send_reset_email(email: str, token: str):
         except Exception as e:
             logger.error(f"Failed to send email via Resend: {e}")
     else:
-        # Fallback for local development when no API key is provided
-        print("\n" + "="*50)
-        print(f"PASSWORD RESET REQUESTED FOR: {email}")
-        print(f"RESET LINK: {reset_link}")
-        print("="*50 + "\n")
+        if settings.ENVIRONMENT == "production":
+            logger.error(f"Failed to send email to {email}: RESEND_API_KEY is missing in production.")
+        else:
+            # Fallback for local development when no API key is provided
+            print("\n" + "="*50)
+            print(f"PASSWORD RESET REQUESTED FOR: {email}")
+            print(f"RESET LINK: {reset_link}")
+            print("="*50 + "\n")
 
 
 @router.post("/forgot-password", dependencies=[Depends(rate_limiter(limit=3, window=60))])
@@ -101,6 +104,13 @@ def forgot_password(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
+    if settings.ENVIRONMENT == "production" and not settings.RESEND_API_KEY:
+        logger.error("RESEND_API_KEY is missing in production. Cannot process password reset.")
+        raise HTTPException(
+            status_code=500,
+            detail="Password reset is currently unavailable due to a server configuration error."
+        )
+
     user = get_user_by_email(db, data.email)
     
     # We return success even if user doesn't exist to prevent email enumeration

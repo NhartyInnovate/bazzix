@@ -9,6 +9,8 @@ if settings.OPENAI_API_KEY:
         api_key=settings.OPENAI_API_KEY
     )
 else:
+    if settings.ENVIRONMENT == "production":
+        raise ValueError("OPENAI_API_KEY is not configured. Production cannot run in mock mode.")
     client = None
 
 
