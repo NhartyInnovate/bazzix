@@ -49,13 +49,8 @@ async def process_chat(
     )
 
     if len(history) == 1:
-        title = await generate_title(user_message)
-
-        update_conversation_title(
-            db,
-            conversation,
-            title,
-        )
+        from app.services.title_generator import dispatch_background_title
+        dispatch_background_title(conversation_id, user_message)
 
     from app.services.context_manager import ContextManager
     context_manager = ContextManager()
@@ -124,13 +119,8 @@ async def process_chat_stream(
     )
 
     if len(history) == 1:
-        title = await generate_title(user_message)
-
-        update_conversation_title(
-            db,
-            conversation,
-            title,
-        )
+        from app.services.title_generator import dispatch_background_title
+        dispatch_background_title(conversation_id, user_message)
 
     from app.services.context_manager import ContextManager
     from app.services.pricing import calculate_cost
