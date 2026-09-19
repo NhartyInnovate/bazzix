@@ -97,7 +97,6 @@ async def generate_chat_response_stream(contents: list[dict], system_instruction
                 
             if chunk.choices and chunk.choices[0].delta.content:
                 yield {"type": "content", "content": chunk.choices[0].delta.content}
-                await asyncio.sleep(0.02)
                 
             if chunk.usage:
                 yield {
