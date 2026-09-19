@@ -7,7 +7,7 @@ from app.db.dependencies import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import User
 
-from app.schemas.payment import CheckoutRequest, CheckoutResponse
+from app.schemas.payment import CheckoutRequest, CheckoutResponse, PurchaseStatusResponse
 from app.services.catalog import get_credit_pack
 from app.services.allocation import initialize_purchase
 from app.services.paystack import PaystackProvider
@@ -81,4 +81,27 @@ def checkout(
         authorization_url=result.authorization_url,
         reference=result.provider_reference,
         provider="paystack"
+    )
+
+@router.get("/{reference}", response_model=PurchaseStatusResponse)
+def get_purchase_status(
+    reference: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from app.models.purchase import Purchase
+    from app.schemas.payment import PurchaseStatusResponse
+    purchase = db.query(Purchase).filter(
+        Purchase.payment_reference == reference
+    ).first()
+    
+    if not purchase or purchase.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Purchase not found."
+        )
+        
+    return PurchaseStatusResponse(
+        reference=purchase.payment_reference,
+        status=purchase.status.name
     )

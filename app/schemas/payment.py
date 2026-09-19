@@ -8,3 +8,7 @@ class CheckoutResponse(BaseModel):
     authorization_url: str
     reference: str
     provider: str
+
+class PurchaseStatusResponse(BaseModel):
+    reference: str
+    status: str

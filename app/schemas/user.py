@@ -47,3 +47,9 @@ class UserCreate(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+class WalletResponse(BaseModel):
+    subscription_balance: int
+    purchased_balance: int
+    reserved_balance: int
+    available_credits: int
