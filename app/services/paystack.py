@@ -59,7 +59,7 @@ class PaystackProvider(PaymentProvider):
             raise PaymentInitializationError("PaystackProvider currently only supports NGN currency.")
 
         # Convert to subunit (kobo)
-        kobo_amount = amount * 100
+        kobo_amount = int(amount * 100)
 
         payload = {
             "email": email,

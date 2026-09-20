@@ -79,7 +79,7 @@ def checkout(
         logger.error(f"Payment provider initialization failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to communicate with payment provider."
+            detail=str(e)
         )
     except Exception as e:
         logger.error(f"Unexpected error during payment initialization: {e}")
