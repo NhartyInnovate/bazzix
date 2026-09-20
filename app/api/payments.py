@@ -61,7 +61,7 @@ def checkout(
     except ValueError as e:
         logger.error(f"Paystack configuration error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payment gateway is currently unconfigured or unavailable."
         )
 
@@ -78,7 +78,7 @@ def checkout(
     except PaymentInitializationError as e:
         logger.error(f"Payment provider initialization failed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
