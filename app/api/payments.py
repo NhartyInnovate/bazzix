@@ -56,7 +56,14 @@ def checkout(
 
     # 4. Initialize Paystack Transaction
     from app.core.config import settings
-    provider = PaystackProvider()
+    try:
+        provider = PaystackProvider()
+    except ValueError as e:
+        logger.error(f"Paystack configuration error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment gateway is currently unconfigured or unavailable."
+        )
 
     callback_url = f"{settings.FRONTEND_URL}/payment/verify"
 
