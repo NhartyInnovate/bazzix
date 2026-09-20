@@ -16,7 +16,7 @@ from app.services.payment import PaymentInitializationError
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/api/payments",
+    prefix="/payments",
     tags=["Payments"],
 )
 
