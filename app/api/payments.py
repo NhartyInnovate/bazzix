@@ -35,8 +35,8 @@ def checkout(
         )
 
     # 2. Payment Reference Generation
-    # UUID4 is alphanumeric with hyphens, safe for Paystack: "bazzix_<uuid>"
-    payment_reference = f"bazzix_{uuid.uuid4()}"
+    # UUID4 is alphanumeric with hyphens, safe for Paystack: "bazzix-<uuid>"
+    payment_reference = f"bazzix-{uuid.uuid4()}"
 
     # 3. Initialize Purchase (PENDING snapshot)
     try:
