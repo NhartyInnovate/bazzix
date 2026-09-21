@@ -79,7 +79,7 @@ def send_reset_email(email: str, token: str):
         try:
             resend.api_key = settings.RESEND_API_KEY
             resend.Emails.send({
-                "from": "Bazzix <support@bazzix.com>",
+                "from": "Bazzix <support@mail.nkaylabs.com>",
                 "to": email,
                 "subject": "Reset your Bazzix Password",
                 "html": html_content
