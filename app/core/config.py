@@ -1,5 +1,11 @@
-from dotenv import load_dotenv
+import sys
 import os
+from dotenv import load_dotenv
+
+# SAFETY GUARD: Force test environment before loading .env if running tests
+if "pytest" in sys.modules:
+    os.environ["ENVIRONMENT"] = "test"
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 # Load environment variables
 load_dotenv()

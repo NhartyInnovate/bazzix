@@ -5,16 +5,26 @@ from app.main import app
 from app.core.config import settings
 from app.crud.user import create_user
 from app.schemas.user import UserCreate
-from app.db.database import SessionLocal, Base, engine
-from sqlalchemy import text
+from app.db.database import Base
+from app.db.dependencies import get_db
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 class TestPasswordResetConfig(unittest.TestCase):
     def setUp(self):
-        Base.metadata.create_all(bind=engine)
-        self.db = SessionLocal()
-        # Clean up users to avoid unique constraint errors
-        self.db.execute(text("DELETE FROM users"))
-        self.db.commit()
+        self.engine = create_engine('sqlite:///:memory:', connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(self.engine)
+        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.db = self.SessionLocal()
+        
+        def override_get_db():
+            try:
+                db = self.SessionLocal()
+                yield db
+            finally:
+                db.close()
+        app.dependency_overrides[get_db] = override_get_db
         
         self.test_email = "reset_test@example.com"
         create_user(self.db, UserCreate(
@@ -30,9 +40,9 @@ class TestPasswordResetConfig(unittest.TestCase):
         rate_limit_records.clear()
 
     def tearDown(self):
-        self.db.execute(text("DELETE FROM users"))
-        self.db.commit()
+        app.dependency_overrides.clear()
         self.db.close()
+        Base.metadata.drop_all(self.engine)
 
     def test_production_missing_resend_key_fails(self):
         import io

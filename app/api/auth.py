@@ -13,6 +13,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _mask_email(email: str) -> str:
+    try:
+        parts = email.split("@")
+        if len(parts) == 2:
+            return f"{parts[0][0]}***@{parts[1]}"
+    except Exception:
+        pass
+    return "***@***"
+
+
 router = APIRouter(
     prefix="/auth",
     tags=["Authentication"],
@@ -72,21 +82,33 @@ def login(
 from app.services.email import get_password_reset_template
 
 def send_reset_email(email: str, token: str):
+    masked_email = _mask_email(email)
+    logger.warning(f"DIAGNOSTIC: send_reset_email started for {masked_email}")
+    
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
     html_content = get_password_reset_template(reset_link)
+    logger.warning(f"DIAGNOSTIC: Template constructed for {masked_email}")
     
     if settings.RESEND_API_KEY:
         try:
             resend.api_key = settings.RESEND_API_KEY
-            resend.Emails.send({
+            logger.warning(f"DIAGNOSTIC: Attempting Resend API call for {masked_email}")
+            
+            response = resend.Emails.send({
                 "from": "Bazzix <support@mail.nkaylabs.com>",
                 "to": email,
                 "subject": "Reset your Bazzix Password",
                 "html": html_content
             })
+            
+            resp_id = response.get("id") if isinstance(response, dict) else getattr(response, "id", "unknown")
+            logger.warning(f"DIAGNOSTIC: Resend API call succeeded for {masked_email}. Response ID: {resp_id}")
             logger.info(f"Successfully dispatched password reset email to {email} via Resend")
+            
         except Exception as e:
-            logger.error(f"Failed to send email via Resend: {e}")
+            exception_type = type(e).__name__
+            safe_message = str(e)
+            logger.error(f"DIAGNOSTIC: Resend email dispatch failed at API call for {masked_email}. Type: {exception_type}, Message: {safe_message}")
     else:
         if settings.ENVIRONMENT == "production":
             logger.error(f"Failed to send email to {email}: RESEND_API_KEY is missing in production.")
@@ -112,11 +134,16 @@ def forgot_password(
         )
 
     user = get_user_by_email(db, data.email)
+    masked_email = _mask_email(data.email)
     
     # We return success even if user doesn't exist to prevent email enumeration
     if user:
         token = create_reset_token(user.email)
+        logger.warning(f"DIAGNOSTIC: User found. Registering password reset task for {masked_email}")
         background_tasks.add_task(send_reset_email, user.email, token)
+        logger.warning(f"DIAGNOSTIC: Password reset task registered for {masked_email}")
+    else:
+        logger.warning(f"DIAGNOSTIC: User not found for password reset request: {masked_email}")
         
     return {"message": "If that email is registered, you will receive a reset link shortly."}
 
