@@ -1,17 +1,18 @@
 from app.core.config import settings
 import os
 
-import os
+if not settings.DATABASE_URL:
+    raise RuntimeError("SAFETY BLOCK: DATABASE_URL is not configured. Migrations cannot proceed.")
+
+db_url_lower = settings.DATABASE_URL.lower()
+
+if settings.ENVIRONMENT == "test" or "sqlite" in db_url_lower:
+    raise RuntimeError("SAFETY BLOCK: Migrations cannot be run in the test environment or against SQLite.")
 
 # Identify if this looks like a production/remote database
 is_production_db = False
-if settings.DATABASE_URL:
-    url = settings.DATABASE_URL.lower()
-    if "localhost" not in url and "127.0.0.1" not in url and "sqlite" not in url:
-        is_production_db = True
-
-if settings.ENVIRONMENT == "test" or "sqlite" in settings.DATABASE_URL.lower():
-    raise RuntimeError("SAFETY BLOCK: Migrations cannot be run in the test environment or against SQLite.")
+if "localhost" not in db_url_lower and "127.0.0.1" not in db_url_lower:
+    is_production_db = True
 
 if is_production_db:
     if os.getenv("CONFIRM_PROD_MIGRATION") != "true":
