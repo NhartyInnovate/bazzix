@@ -30,7 +30,31 @@ router = APIRouter(
 
 
 @router.post("/register", dependencies=[Depends(rate_limiter(limit=5, window=60))])
-def register(user: UserCreate, db: Session = Depends(get_db)):
+
+def send_welcome_email(email: str):
+    masked_email = _mask_email(email)
+    logger.info(f"send_welcome_email started for {masked_email}")
+    
+    dashboard_link = f"{settings.FRONTEND_URL}/dashboard"
+    html_content = get_welcome_template(dashboard_link, settings.FRONTEND_URL)
+    
+    if settings.RESEND_API_KEY:
+        try:
+            resend.api_key = settings.RESEND_API_KEY
+            response = resend.Emails.send({
+                "from": "Bazzix <support@mail.nkaylabs.com>",
+                "to": email,
+                "subject": "Welcome to Bazzix",
+                "html": html_content
+            })
+            logger.info(f"Successfully dispatched welcome email to {masked_email} via Resend")
+        except Exception as e:
+            logger.error(f"Failed to send welcome email to {masked_email}: {e}")
+    else:
+        logger.warning(f"RESEND_API_KEY is not set. Welcome email skipped for {masked_email}")
+
+
+def register(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     existing_user = get_user_by_email(db, user.email)
 
     if existing_user:
@@ -40,6 +64,7 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         )
     
     created_user = create_user(db, user)
+    background_tasks.add_task(send_welcome_email, created_user.email)
 
     return {
         "message": "User registered successfully!",
@@ -79,7 +104,7 @@ def login(
     }
 
 
-from app.services.email import get_password_reset_template
+from app.services.email import get_password_reset_template, get_welcome_template
 
 def send_reset_email(email: str, token: str):
     masked_email = _mask_email(email)
