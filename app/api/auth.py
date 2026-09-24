@@ -29,8 +29,6 @@ router = APIRouter(
 )
 
 
-@router.post("/register", dependencies=[Depends(rate_limiter(limit=5, window=60))])
-
 def send_welcome_email(email: str):
     masked_email = _mask_email(email)
     logger.info(f"send_welcome_email started for {masked_email}")
@@ -54,6 +52,7 @@ def send_welcome_email(email: str):
         logger.warning(f"RESEND_API_KEY is not set. Welcome email skipped for {masked_email}")
 
 
+@router.post("/register", dependencies=[Depends(rate_limiter(limit=5, window=60))])
 def register(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     existing_user = get_user_by_email(db, user.email)
 
