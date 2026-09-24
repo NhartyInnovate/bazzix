@@ -33,3 +33,14 @@ def get_current_user(
         )
 
     return user
+
+def get_current_admin(
+    user = Depends(get_current_user),
+):
+    from app.models.user import RoleType
+    if user.role != RoleType.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions",
+        )
+    return user
