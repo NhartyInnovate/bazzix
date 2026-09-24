@@ -16,6 +16,7 @@ def me(current_user=Depends(get_current_user)):
         "first_name": current_user.first_name,
         "last_name": current_user.last_name,
         "email": current_user.email,
+        "role": current_user.role.name,
     }
 
 @router.get("/me/wallet")
