@@ -262,11 +262,14 @@ def get_audit_logs(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     action: str = Query(None),
+    target_user_id: int = Query(None),
     db: Session = Depends(get_db)
 ):
     query = db.query(AdminAuditLog)
     if action:
         query = query.filter(AdminAuditLog.action == action)
+    if target_user_id is not None:
+        query = query.filter(AdminAuditLog.target_user_id == target_user_id)
 
     total = query.count()
     logs = query.order_by(AdminAuditLog.id.desc()).offset((page-1)*size).limit(size).all()

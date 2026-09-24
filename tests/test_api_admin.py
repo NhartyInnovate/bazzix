@@ -149,10 +149,45 @@ class TestAdminAPI(unittest.TestCase):
         resp = self.client.get("/admin/users/1/ledger")
         self.assertEqual(resp.status_code, 200)
 
-    def test_audit_logs_pagination(self):
+    def test_audit_logs_filtering(self):
         self._set_user(self.admin_user)
-        resp = self.client.get("/admin/audit-logs")
-        self.assertEqual(resp.status_code, 200)
+
+        # Create second normal user
+        user2 = User(id=3, first_name="User2", last_name="Two", email="two@test.com", hashed_password="pw", role=RoleType.USER)
+        self.db.add(user2)
+
+        # Create audit records
+        log1 = AdminAuditLog(admin_user_id=2, target_user_id=1, action="CREDIT_ADJUSTMENT")
+        log2 = AdminAuditLog(admin_user_id=2, target_user_id=1, action="OTHER_ACTION")
+        log3 = AdminAuditLog(admin_user_id=2, target_user_id=3, action="CREDIT_ADJUSTMENT")
+
+        self.db.add_all([log1, log2, log3])
+        self.db.commit()
+
+        # A. Existing global behavior
+        resp_global = self.client.get("/admin/audit-logs")
+        self.assertEqual(resp_global.status_code, 200)
+        global_data = resp_global.json()["items"]
+        self.assertTrue(len(global_data) >= 3)
+
+        # B. Scoped behavior & C. Isolation
+        resp_scoped = self.client.get("/admin/audit-logs?target_user_id=1")
+        self.assertEqual(resp_scoped.status_code, 200)
+        scoped_data = resp_scoped.json()["items"]
+        self.assertEqual(len(scoped_data), 2)
+        self.assertTrue(all(item["target_user_id"] == 1 for item in scoped_data))
+
+        # D. Non-existent target
+        resp_none = self.client.get("/admin/audit-logs?target_user_id=999")
+        self.assertEqual(resp_none.status_code, 200)
+        self.assertEqual(len(resp_none.json()["items"]), 0)
+
+        # E. Existing action filtering works combined
+        resp_combined = self.client.get("/admin/audit-logs?target_user_id=1&action=CREDIT_ADJUSTMENT")
+        self.assertEqual(resp_combined.status_code, 200)
+        combined_data = resp_combined.json()["items"]
+        self.assertEqual(len(combined_data), 1)
+        self.assertEqual(combined_data[0]["action"], "CREDIT_ADJUSTMENT")
 
     def test_credit_adjustment_atomicity(self):
         self._set_user(self.admin_user)
