@@ -34,6 +34,9 @@ app.include_router(chat_router)
 app.include_router(payments_router)
 app.include_router(webhooks_router)
 
+from app.api.admin import router as admin_router
+app.include_router(admin_router)
+
 
 @app.get("/")
 def root():
