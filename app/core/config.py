@@ -20,7 +20,7 @@ class Settings:
         os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60)
     )
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     RESEND_API_KEY = os.getenv("RESEND_API_KEY")
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080").rstrip("/")
     ALLOWED_ORIGINS = [

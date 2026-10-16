@@ -32,5 +32,14 @@ class TestLLMConfig(unittest.TestCase):
                 self.assertIsNotNone(llm.client)
                 self.assertEqual(llm.client.api_key, 'sk-test-key')
 
+    def test_configured_model_matches_pricing_registry(self):
+        from app.services.pricing import PROVIDER_REGISTRY
+        self.assertIn("openai", PROVIDER_REGISTRY)
+        self.assertIn(settings.OPENAI_MODEL, PROVIDER_REGISTRY["openai"])
+        pricing = PROVIDER_REGISTRY["openai"][settings.OPENAI_MODEL]
+        self.assertGreater(pricing.prompt_token_cost, 0)
+        self.assertGreater(pricing.completion_token_cost, 0)
+
 if __name__ == '__main__':
     unittest.main()
+
