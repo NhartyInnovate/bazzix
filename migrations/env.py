@@ -26,7 +26,17 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.db.database import Base
-from app.models.user import User
+from app.models import (  # noqa: F401 - Register all 9 models with Base.metadata
+    User,
+    Conversation,
+    Message,
+    Wallet,
+    LedgerTransaction,
+    AIRequestLog,
+    Subscription,
+    Purchase,
+    AdminAuditLog,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -174,5 +174,24 @@ class TestCreditModels(unittest.TestCase):
             self.db.commit()
         self.db.rollback()
 
+    def test_all_models_registered_in_metadata(self):
+        import app.models  # Ensure models module loaded
+        expected_tables = {
+            "users",
+            "conversations",
+            "messages",
+            "wallets",
+            "ledger_transactions",
+            "ai_request_logs",
+            "subscriptions",
+            "purchases",
+            "admin_audit_logs",
+        }
+        actual_tables = set(Base.metadata.tables.keys())
+        self.assertTrue(
+            expected_tables.issubset(actual_tables),
+            f"Missing tables in Base.metadata: {expected_tables - actual_tables}"
+        )
+
 if __name__ == '__main__':
     unittest.main()
