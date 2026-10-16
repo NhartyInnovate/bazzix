@@ -34,12 +34,22 @@ async def generate_response(prompt: str) -> str:
         raise RuntimeError(f"OpenAI API Error: {str(e)}")
 
 
-async def generate_chat_response(contents: list[dict], system_instruction: str) -> str:
+async def generate_chat_response(contents: list[dict], system_instruction: str, return_usage: bool = False):
     if client is None:
         last_message = ""
         if contents:
             last_message = contents[-1].get("content", "")
-        return f"This is a mock AI response. (Bazzix running in Mock Mode - OPENAI_API_KEY not configured).\n\nYou said: {last_message[:100]}..."
+        mock_response = f"This is a mock AI response. (Bazzix running in Mock Mode - OPENAI_API_KEY not configured).\n\nYou said: {last_message[:100]}..."
+        if return_usage:
+            words = mock_response.split(" ")
+            usage_data = {
+                "provider_request_id": "mock-req-id",
+                "prompt_tokens": 15,
+                "completion_tokens": len(words),
+                "cached_tokens": 0,
+            }
+            return mock_response, usage_data
+        return mock_response
 
     try:
         messages = [
@@ -51,7 +61,23 @@ async def generate_chat_response(contents: list[dict], system_instruction: str) 
             messages=messages,
         )
 
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+        if return_usage:
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+            prompt_details = getattr(usage, "prompt_tokens_details", None) if usage else None
+            cached_tokens = getattr(prompt_details, "cached_tokens", 0) if prompt_details else 0
+
+            usage_data = {
+                "provider_request_id": getattr(response, "id", None),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_tokens": cached_tokens or 0,
+            }
+            return content, usage_data
+
+        return content
 
     except Exception as e:
         raise RuntimeError(f"OpenAI API Error: {str(e)}")

@@ -17,13 +17,18 @@ import time
 
 
 
+import uuid
+
+
 async def process_chat(
     db: Session,
     user_id: int,
     conversation_id: int,
     user_message: str,
+    client_request_id: str | None = None,
 ):
-    request_start = time.perf_counter()
+    if not client_request_id:
+        client_request_id = str(uuid.uuid4())
 
     conversation = get_conversation(
         db,
@@ -35,6 +40,10 @@ async def process_chat(
         or conversation.user_id != user_id
     ):
         raise ValueError("Conversation not found")
+
+    from app.services.ai_request import create_ai_request_log, finalize_ai_request_log
+    from app.models.ai_request import RequestStatus, UsageSource
+    ai_request = create_ai_request_log(db, client_request_id, user_id, conversation_id)
 
     save_message(
         db,
@@ -53,33 +62,96 @@ async def process_chat(
         dispatch_background_title(conversation_id, user_message)
 
     from app.services.context_manager import ContextManager
+    from app.services.pricing import calculate_cost
+    from app.services.credit_manager import reserve_credits, finalize_and_settle_credits
+    from app.core.config import settings
+
     context_manager = ContextManager()
-    
+
     raw_history = []
     for msg in history[:-1]:
         raw_history.append({"role": msg.role, "content": msg.content})
-        
+
     context_data = context_manager.build_context(SYSTEM_PROMPT, raw_history, user_message)
     contents = context_data["bounded_history"] + [{"role": "user", "content": user_message}]
 
-    gemini_start = time.perf_counter()
-
-    ai_response = await structured_chat(contents, SYSTEM_PROMPT)
-
-    print(
-        f"Gemini took {time.perf_counter() - gemini_start:.2f}s"
+    # Calculate max required cost
+    max_cost_result = calculate_cost(
+        provider="openai",
+        model=settings.OPENAI_MODEL,
+        prompt_tokens=context_data["estimated_input_tokens"],
+        completion_tokens=context_data["available_output_budget"],
+        cached_tokens=0  # Safest assumption: nothing is cached
     )
 
-    save_message(
-        db,
-        conversation_id,
-        "assistant",
-        ai_response,
-    )
+    try:
+        # Attempt to reserve credits. This holds a row lock momentarily and commits.
+        reserved_amount = reserve_credits(
+            db=db,
+            user_id=user_id,
+            request_id=ai_request.id,
+            max_cost=max_cost_result.bazzix_credits
+        )
+    except Exception as e:
+        # If reservation fails (e.g. InsufficientCreditsError), request cannot proceed.
+        # Mark AIRequestLog as FAILED so it does not remain PENDING forever.
+        finalize_ai_request_log(db, ai_request, status=RequestStatus.FAILED)
+        raise e
 
-    print(
-        f"Total request took {time.perf_counter() - request_start:.2f}s"
-    )
+    ai_response = None
+    usage_data = None
+    provider_error = False
+
+    try:
+        ai_response, usage_data = await structured_chat(
+            contents,
+            SYSTEM_PROMPT,
+            return_usage=True
+        )
+
+        save_message(
+            db,
+            conversation_id,
+            "assistant",
+            ai_response,
+        )
+    except Exception as e:
+        provider_error = True
+        raise e
+    finally:
+        req_id = None
+        prompt_t = None
+        comp_t = None
+        cached_t = None
+        src = None
+
+        if usage_data:
+            prompt_t = usage_data.get("prompt_tokens")
+            comp_t = usage_data.get("completion_tokens")
+            cached_t = usage_data.get("cached_tokens")
+            req_id = usage_data.get("provider_request_id")
+            src = UsageSource.PROVIDER
+
+        if not provider_error and ai_response is not None:
+            finalize_and_settle_credits(
+                db, ai_request,
+                status=RequestStatus.COMPLETED,
+                provider_request_id=req_id,
+                prompt_tokens=prompt_t,
+                completion_tokens=comp_t,
+                cached_tokens=cached_t,
+                usage_source=src
+            )
+        else:
+            finalize_and_settle_credits(
+                db, ai_request,
+                status=RequestStatus.FAILED,
+                provider_request_id=req_id,
+                prompt_tokens=prompt_t,
+                completion_tokens=comp_t,
+                cached_tokens=cached_t,
+                usage_source=src
+            )
 
     return ai_response
 

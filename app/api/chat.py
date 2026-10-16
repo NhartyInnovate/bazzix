@@ -30,12 +30,12 @@ async def chat(
 ):
 
     try:
-
         response = await process_chat(
             db,
             current_user.id,
             request.conversation_id,
             request.message,
+            request.client_request_id,
         )
 
         return ChatResponse(
@@ -45,6 +45,18 @@ async def chat(
     except ValueError as e:
         raise HTTPException(
             status_code=404,
+            detail=str(e)
+        )
+
+    except DuplicateRequestError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e)
+        )
+
+    except InsufficientCreditsError as e:
+        raise HTTPException(
+            status_code=402,
             detail=str(e)
         )
 
