@@ -115,5 +115,7 @@ def get_purchase_status(
 
     return PurchaseStatusResponse(
         reference=purchase.payment_reference,
-        status=purchase.status.name
+        status=purchase.status.name,
+        credit_amount=purchase.credit_allocation,
+        product_name=purchase.product_name_snapshot
     )

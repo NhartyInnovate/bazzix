@@ -12,3 +12,5 @@ class CheckoutResponse(BaseModel):
 class PurchaseStatusResponse(BaseModel):
     reference: str
     status: str
+    credit_amount: Optional[int] = None
+    product_name: Optional[str] = None

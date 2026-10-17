@@ -87,12 +87,16 @@ class TestPurchaseStatusAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reference"], ref)
         self.assertEqual(response.json()["status"], "PENDING")
+        self.assertEqual(response.json()["credit_amount"], 1000)
+        self.assertEqual(response.json()["product_name"], "Small Pack")
 
     def test_status_success(self):
         ref = self._create_purchase(self.user.id, PurchaseStatus.SUCCESS)
         response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "SUCCESS")
+        self.assertEqual(response.json()["credit_amount"], 1000)
+        self.assertEqual(response.json()["product_name"], "Small Pack")
 
     def test_status_failed(self):
         ref = self._create_purchase(self.user.id, PurchaseStatus.FAILED)
