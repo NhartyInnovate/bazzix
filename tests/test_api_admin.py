@@ -84,6 +84,18 @@ class TestAdminAPI(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["users"][0]["email"], "normal@test.com")
+        # Without wallet provisioned, available_credits must be None, not 0
+        self.assertIsNone(data["users"][0]["available_credits"])
+
+        # With wallet provisioned with 0 credits, available_credits must be 0
+        wallet = Wallet(user_id=self.normal_user.id, subscription_balance=0, purchased_balance=0, reserved_balance=0)
+        self.db.add(wallet)
+        self.db.commit()
+
+        response2 = self.client.get("/admin/users?page=1&size=10&search=normal")
+        self.assertEqual(response2.status_code, 200)
+        data2 = response2.json()
+        self.assertEqual(data2["users"][0]["available_credits"], 0)
 
     def test_credit_adjustment(self):
         self._set_user(self.admin_user)

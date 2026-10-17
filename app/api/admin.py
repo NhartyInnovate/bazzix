@@ -92,7 +92,7 @@ def list_users(
             is_active=user.is_active,
             is_verified=user.is_verified,
             created_at=user.created_at,
-            available_credits=wallet.available_credits if wallet else 0
+            available_credits=wallet.available_credits if wallet is not None else None
         ))
 
     return AdminUserListResponse(
@@ -120,7 +120,7 @@ def get_user_detail(user_id: int, db: Session = Depends(get_db)):
         is_active=user.is_active,
         is_verified=user.is_verified,
         created_at=user.created_at,
-        available_credits=wallet.available_credits if wallet else 0,
+        available_credits=wallet.available_credits if wallet is not None else None,
         subscription_balance=wallet.subscription_balance if wallet else 0,
         purchased_balance=wallet.purchased_balance if wallet else 0,
         reserved_balance=wallet.reserved_balance if wallet else 0,

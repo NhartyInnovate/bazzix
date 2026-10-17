@@ -22,7 +22,7 @@ class AdminUserSummary(BaseModel):
     is_active: bool
     is_verified: bool
     created_at: datetime
-    available_credits: int
+    available_credits: Optional[int] = None
 
 class AdminUserListResponse(BaseModel):
     users: List[AdminUserSummary]
