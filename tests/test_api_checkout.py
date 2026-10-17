@@ -14,6 +14,7 @@ from app.models.purchase import Purchase, PurchaseStatus
 from app.models.wallet import Wallet
 from app.models.ledger import LedgerTransaction
 from app.services.payment import PaymentInitializationResult, PaymentInitializationError
+from app.core.config import settings
 
 
 from sqlalchemy.pool import StaticPool
@@ -56,7 +57,11 @@ class TestCheckoutAPI(unittest.TestCase):
 
         self.client = TestClient(app)
 
+        self.original_key = settings.PAYSTACK_SECRET_KEY
+        settings.PAYSTACK_SECRET_KEY = "test_secret_key"
+
     def tearDown(self):
+        settings.PAYSTACK_SECRET_KEY = self.original_key
         app.dependency_overrides.clear()
         self.db.close()
         Base.metadata.drop_all(self.engine)
@@ -73,7 +78,7 @@ class TestCheckoutAPI(unittest.TestCase):
             provider_transaction_id=None
         )
 
-        response = self.client.post("/api/payments/checkout", json={
+        response = self.client.post("/payments/checkout", json={
             "product_id": "credit_small"
         })
 
@@ -90,8 +95,9 @@ class TestCheckoutAPI(unittest.TestCase):
         kwargs = mock_provider.initialize_transaction.call_args[1]
         self.assertEqual(kwargs["callback_url"], expected_callback)
 
-        # Verify DB Purchase
-        purchase = self.db.query(Purchase).first()
+        # Verify DB Purchase survives closing the request session in a fresh session
+        fresh_db = self.SessionLocal()
+        purchase = fresh_db.query(Purchase).first()
         self.assertIsNotNone(purchase)
         self.assertEqual(purchase.status, PurchaseStatus.PENDING)
         self.assertEqual(purchase.product_id, "credit_small")
@@ -104,9 +110,10 @@ class TestCheckoutAPI(unittest.TestCase):
             reference=purchase.payment_reference,
             callback_url=expected_callback
         )
+        fresh_db.close()
 
     def test_checkout_invalid_product(self):
-        response = self.client.post("/api/payments/checkout", json={
+        response = self.client.post("/payments/checkout", json={
             "product_id": "invalid_product"
         })
         self.assertEqual(response.status_code, 400)
@@ -118,16 +125,90 @@ class TestCheckoutAPI(unittest.TestCase):
         mock_provider_class.return_value = mock_provider
         mock_provider.initialize_transaction.side_effect = PaymentInitializationError("Provider down")
 
-        response = self.client.post("/api/payments/checkout", json={
+        response = self.client.post("/payments/checkout", json={
             "product_id": "credit_small"
         })
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 400)
+
+        # Verify purchase remains PENDING so it is recoverable if provider actually charged
+        fresh_db = self.SessionLocal()
+        purchase = fresh_db.query(Purchase).first()
+        self.assertIsNotNone(purchase)
+        self.assertEqual(purchase.status, PurchaseStatus.PENDING)
+        fresh_db.close()
 
     def test_checkout_unauthenticated(self):
         # Remove dependency override
         app.dependency_overrides.pop(get_current_user)
         
-        response = self.client.post("/api/payments/checkout", json={
+        response = self.client.post("/payments/checkout", json={
             "product_id": "credit_small"
         })
         self.assertEqual(response.status_code, 401)
+
+    @patch("app.api.payments.PaystackProvider")
+    def test_checkout_ambiguous_provider_timeout_recoverable_via_webhook(self, mock_provider_class):
+        # 1. Provider initialize_transaction times out / network error
+        mock_provider = Mock()
+        mock_provider_class.return_value = mock_provider
+        mock_provider.initialize_transaction.side_effect = PaymentInitializationError("Network error during initialization.")
+
+        response = self.client.post("/payments/checkout", json={
+            "product_id": "credit_small"
+        })
+        self.assertEqual(response.status_code, 400)
+
+        # 2. Verify durable PENDING purchase exists in fresh session
+        fresh_db = self.SessionLocal()
+        purchase = fresh_db.query(Purchase).filter(Purchase.user_id == self.user.id).first()
+        self.assertIsNotNone(purchase)
+        self.assertEqual(purchase.status, PurchaseStatus.PENDING)
+        saved_ref = purchase.payment_reference
+        fresh_db.close()
+
+        # 3. Provider actually accepted charge remotely and webhook arrives
+        import hmac, json
+        from app.core.config import settings
+        payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": saved_ref,
+                "amount": 150000,
+                "currency": "NGN",
+                "id": 7777,
+                "paid_at": "2026-03-30T10:00:00.000Z"
+            }
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = hmac.new(settings.PAYSTACK_SECRET_KEY.encode('utf-8'), body, digestmod='sha512').hexdigest()
+
+        webhook_response = self.client.post(
+            "/api/webhooks/paystack",
+            content=body,
+            headers={"x-paystack-signature": sig}
+        )
+        self.assertEqual(webhook_response.status_code, 200)
+
+        # 4. Verify in fresh session that purchase is SUCCESS and wallet credited
+        fresh_db2 = self.SessionLocal()
+        recovered_purchase = fresh_db2.query(Purchase).filter(Purchase.payment_reference == saved_ref).first()
+        self.assertEqual(recovered_purchase.status, PurchaseStatus.SUCCESS)
+        fresh_wallet = fresh_db2.query(Wallet).filter(Wallet.user_id == self.user.id).first()
+        self.assertEqual(fresh_wallet.purchased_balance, 5000)
+        fresh_db2.close()
+
+    @patch("app.api.payments.initialize_purchase")
+    def test_checkout_db_failure(self, mock_init):
+        mock_init.side_effect = Exception("DB Connection Lost")
+
+        response = self.client.post("/payments/checkout", json={
+            "product_id": "credit_small"
+        })
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["message"], "Could not initialize purchase.")
+
+        # Ensure no purchase is created in DB
+        fresh_db = self.SessionLocal()
+        purchases = fresh_db.query(Purchase).all()
+        self.assertEqual(len(purchases), 0)
+        fresh_db.close()

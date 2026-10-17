@@ -229,3 +229,96 @@ class TestAllocationService(unittest.TestCase):
             fulfill_purchase(self.db, purchase.id)
 
         self.db.rollback()
+
+    def test_failed_purchase_recovered_when_allowed(self):
+        purchase = initialize_purchase(
+            self.db,
+            user_id=self.user.id,
+            product_id="credit_medium",
+            payment_provider="paystack",
+            payment_reference="txn_recovery_test"
+        )
+        purchase.status = PurchaseStatus.FAILED
+        self.db.commit()
+
+        fulfilled = fulfill_purchase(
+            self.db,
+            purchase_id=purchase.id,
+            verified_amount=5000,
+            verified_currency="NGN",
+            provider_transaction_id="tx_recov_1",
+            allow_recovery=True
+        )
+        self.db.commit()
+
+        self.assertEqual(fulfilled.status, PurchaseStatus.SUCCESS)
+        self.assertEqual(fulfilled.provider_transaction_id, "tx_recov_1")
+        self.db.refresh(self.wallet)
+        self.assertEqual(self.wallet.purchased_balance, 20000)
+
+        tx = self.db.query(LedgerTransaction).filter_by(reference_id=f"purchase_{purchase.id}").first()
+        self.assertIsNotNone(tx)
+        self.assertEqual(tx.amount, 20000)
+
+    def test_wallet_concurrency_conflict_recovers_and_credits(self):
+        new_user = User(first_name="Race", last_name="User", email="race@example.com", hashed_password="pw", is_active=True)
+        self.db.add(new_user)
+        self.db.commit()
+
+        # Pre-seed the wallet that the concurrent process committed
+        existing_wallet = Wallet(user_id=new_user.id, subscription_balance=100, purchased_balance=50, reserved_balance=0)
+        self.db.add(existing_wallet)
+        self.db.commit()
+
+        purchase = initialize_purchase(
+            self.db,
+            user_id=new_user.id,
+            product_id="credit_medium",
+            payment_provider="paystack",
+            payment_reference="txn_race_test"
+        )
+        self.db.commit()
+
+        # Simulate race: the initial wallet check didn't see the wallet (returns None),
+        # so it attempts to insert and triggers a REAL unique constraint IntegrityError on db.flush().
+        wallet_query_count = 0
+        real_query = self.db.query
+
+        from unittest.mock import Mock
+
+        def mock_query(model, *args, **kwargs):
+            nonlocal wallet_query_count
+            if model is Wallet:
+                wallet_query_count += 1
+                if wallet_query_count == 1:
+                    mock_q = Mock()
+                    mock_q.filter.return_value = mock_q
+                    mock_q.with_for_update.return_value = mock_q
+                    mock_q.first.return_value = None
+                    return mock_q
+            return real_query(model, *args, **kwargs)
+
+        self.db.query = mock_query
+
+        fulfilled = fulfill_purchase(
+            self.db,
+            purchase_id=purchase.id,
+            verified_amount=5000,
+            verified_currency="NGN",
+            provider_transaction_id="tx_race_1"
+        )
+        self.db.commit()
+
+        # Restore original query
+        self.db.query = real_query
+
+        self.assertEqual(wallet_query_count, 2, "Expected exactly two wallet queries (initial + re-query)")
+        self.assertEqual(fulfilled.status, PurchaseStatus.SUCCESS)
+
+        # Verify that the concurrent wallet's existing balances were preserved and purchased_balance was incremented
+        final_wallet = self.db.query(Wallet).filter_by(user_id=new_user.id).first()
+        self.assertEqual(final_wallet.subscription_balance, 100) # preserved, not overwritten
+        self.assertEqual(final_wallet.purchased_balance, 50 + 20000) # incremented correctly
+        tx = self.db.query(LedgerTransaction).filter_by(reference_id=f"purchase_{purchase.id}").first()
+        self.assertIsNotNone(tx)
+        self.assertEqual(tx.amount, 20000)

@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 import datetime
+import logging
 
 from app.models.wallet import Wallet
 from app.models.ledger import LedgerTransaction, TransactionType
@@ -9,11 +10,21 @@ from app.models.subscription import Subscription
 from app.services.catalog import get_subscription_plan, get_credit_pack
 from sqlalchemy.sql import func
 
+logger = logging.getLogger(__name__)
+
 
 class AllocationIdempotencyError(Exception):
     pass
 
 class AllocationError(Exception):
+    pass
+
+class AllocationValidationError(AllocationError):
+    """Raised for non-retryable payment data mismatches (amount, currency)."""
+    pass
+
+class AllocationTransientError(AllocationError):
+    """Raised for recoverable fulfillment or resource lookup failures."""
     pass
 
 
@@ -97,46 +108,76 @@ def fulfill_purchase(
     verified_currency: str = None,
     provider_transaction_id: str = None,
     paid_at: datetime.datetime = None,
+    allow_recovery: bool = False,
 ) -> Purchase:
-    """Fulfills a PENDING purchase, verifying the amount/currency if supplied, and allocates credits."""
-    try:
-        with db.begin_nested():
-            purchase = db.query(Purchase).filter(Purchase.id == purchase_id).with_for_update().first()
-            if not purchase:
-                raise AllocationError("Purchase not found.")
+    """Fulfills a PENDING purchase (or FAILED if allow_recovery=True), verifying the amount/currency if supplied, and allocates credits."""
+    with db.begin_nested():
+        purchase = db.query(Purchase).filter(Purchase.id == purchase_id).with_for_update().first()
+        if not purchase:
+            raise AllocationTransientError("Purchase not found.")
 
-            if purchase.status == PurchaseStatus.SUCCESS:
-                raise AllocationIdempotencyError("Purchase already fulfilled.")
+        if purchase.status == PurchaseStatus.SUCCESS:
+            raise AllocationIdempotencyError("Purchase already fulfilled.")
 
-            if purchase.status != PurchaseStatus.PENDING:
-                raise AllocationError(f"Cannot fulfill purchase in state: {purchase.status.name}")
+        if verified_amount is not None and verified_amount != purchase.price_amount:
+            raise AllocationValidationError(f"Amount mismatch. Expected {purchase.price_amount}, got {verified_amount}.")
 
-            if verified_amount is not None and verified_amount != purchase.price_amount:
-                raise AllocationError(f"Amount mismatch. Expected {purchase.price_amount}, got {verified_amount}.")
+        if verified_currency is not None and verified_currency != purchase.price_currency:
+            raise AllocationValidationError(f"Currency mismatch. Expected {purchase.price_currency}, got {verified_currency}.")
 
-            if verified_currency is not None and verified_currency != purchase.price_currency:
-                raise AllocationError(f"Currency mismatch. Expected {purchase.price_currency}, got {verified_currency}.")
+        if purchase.status != PurchaseStatus.PENDING:
+            if allow_recovery and purchase.status == PurchaseStatus.FAILED:
+                logger.warning(
+                    f"Recovering purchase {purchase.id} (ref={purchase.payment_reference}) "
+                    f"from FAILED to SUCCESS via verified payment."
+                )
+            else:
+                raise AllocationValidationError(f"Cannot fulfill purchase in state: {purchase.status.name}")
 
-            wallet = db.query(Wallet).filter(Wallet.user_id == purchase.user_id).with_for_update().first()
-            if not wallet:
-                raise AllocationError("User wallet not found.")
+        wallet = db.query(Wallet).filter(Wallet.user_id == purchase.user_id).with_for_update().first()
+        if not wallet:
+            try:
+                with db.begin_nested():
+                    wallet = Wallet(
+                        user_id=purchase.user_id,
+                        subscription_balance=0,
+                        purchased_balance=0,
+                        reserved_balance=0
+                    )
+                    db.add(wallet)
+                    db.flush()
+            except IntegrityError:
+                # Concurrency race: another transaction provisioned the wallet simultaneously.
+                # Re-fetch the newly created wallet with lock.
+                wallet = db.query(Wallet).filter(Wallet.user_id == purchase.user_id).with_for_update().first()
+                if not wallet:
+                    raise AllocationTransientError("Failed to acquire wallet after concurrent creation.")
 
-            wallet.purchased_balance += purchase.credit_allocation
+        wallet.purchased_balance += purchase.credit_allocation
 
-            tx = LedgerTransaction(
-                wallet_id=wallet.id,
-                amount=purchase.credit_allocation,
-                transaction_type=TransactionType.PURCHASE,
-                reference_id=f"purchase_{purchase.id}"
-            )
-            db.add(tx)
+        tx = LedgerTransaction(
+            wallet_id=wallet.id,
+            amount=purchase.credit_allocation,
+            transaction_type=TransactionType.PURCHASE,
+            reference_id=f"purchase_{purchase.id}"
+        )
+        db.add(tx)
 
-            purchase.status = PurchaseStatus.SUCCESS
-            purchase.paid_at = paid_at if paid_at is not None else func.now()
-            if provider_transaction_id:
-                purchase.provider_transaction_id = provider_transaction_id
+        purchase.status = PurchaseStatus.SUCCESS
+        purchase.paid_at = paid_at if paid_at is not None else func.now()
+        if provider_transaction_id:
+            purchase.provider_transaction_id = provider_transaction_id
 
+        try:
             db.flush()
-        return purchase
-    except IntegrityError:
-        raise AllocationIdempotencyError("Purchase already fulfilled via ledger constraint.")
+        except IntegrityError as e:
+            # Check if ledger unique constraint caused this (another process already fulfilled this purchase)
+            existing_tx = db.query(LedgerTransaction).filter(
+                LedgerTransaction.transaction_type == TransactionType.PURCHASE,
+                LedgerTransaction.reference_id == f"purchase_{purchase.id}"
+            ).first()
+            if existing_tx:
+                raise AllocationIdempotencyError("Purchase already fulfilled via ledger constraint.") from e
+            raise
+
+    return purchase

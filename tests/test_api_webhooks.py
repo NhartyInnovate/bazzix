@@ -17,6 +17,7 @@ from app.models.user import User
 from app.models.wallet import Wallet
 from app.models.ledger import LedgerTransaction
 from app.models.purchase import Purchase, PurchaseStatus
+from app.services.allocation import AllocationTransientError
 
 class TestWebhooksAPI(unittest.TestCase):
     def setUp(self):
@@ -134,8 +135,8 @@ class TestWebhooksAPI(unittest.TestCase):
             content=body,
             headers={"x-paystack-signature": sig}
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "success")
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["message"], "Purchase reference not found")
 
     def test_missing_required_data(self):
         payload = {
@@ -174,7 +175,7 @@ class TestWebhooksAPI(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
-        # Check DB State
+        # Check DB State in existing session
         self.db.refresh(self.purchase)
         self.assertEqual(self.purchase.status, PurchaseStatus.SUCCESS)
         self.assertEqual(self.purchase.provider_transaction_id, "9999")
@@ -187,6 +188,19 @@ class TestWebhooksAPI(unittest.TestCase):
         self.assertIsNotNone(ledger_tx)
         self.assertEqual(ledger_tx.amount, 5000)
         self.assertEqual(ledger_tx.reference_id, "purchase_1")
+
+        # Verify DB changes survive closing the request session in a fresh session
+        fresh_db = self.SessionLocal()
+        fresh_purchase = fresh_db.query(Purchase).filter(Purchase.payment_reference == "bzx_123").first()
+        self.assertEqual(fresh_purchase.status, PurchaseStatus.SUCCESS)
+        self.assertEqual(fresh_purchase.provider_transaction_id, "9999")
+        fresh_wallet = fresh_db.query(Wallet).filter(Wallet.user_id == self.user.id).first()
+        self.assertEqual(fresh_wallet.purchased_balance, 5000)
+        fresh_ledger = fresh_db.query(LedgerTransaction).filter(LedgerTransaction.wallet_id == fresh_wallet.id).first()
+        self.assertIsNotNone(fresh_ledger)
+        self.assertEqual(fresh_ledger.amount, 5000)
+        self.assertEqual(fresh_ledger.reference_id, "purchase_1")
+        fresh_db.close()
 
     def test_duplicate_webhook(self):
         # Already successful
@@ -215,6 +229,12 @@ class TestWebhooksAPI(unittest.TestCase):
         self.db.refresh(self.wallet)
         self.assertEqual(self.wallet.purchased_balance, 0)
 
+        # Check in fresh session
+        fresh_db = self.SessionLocal()
+        fresh_wallet = fresh_db.query(Wallet).filter(Wallet.user_id == self.user.id).first()
+        self.assertEqual(fresh_wallet.purchased_balance, 0)
+        fresh_db.close()
+
     def test_amount_mismatch(self):
         payload = {
             "event": "charge.success",
@@ -222,6 +242,31 @@ class TestWebhooksAPI(unittest.TestCase):
                 "reference": "bzx_123",
                 "amount": 100000,  # 1000 NGN instead of 1500
                 "currency": "NGN",
+                "id": 9999
+            }
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = self._generate_signature(body)
+        response = self.client.post(
+            "/api/webhooks/paystack",
+            content=body,
+            headers={"x-paystack-signature": sig}
+        )
+        # Returns 200 to ack Paystack, but does NOT fulfill
+        self.assertEqual(response.status_code, 200)
+
+        self.db.refresh(self.purchase)
+        self.assertEqual(self.purchase.status, PurchaseStatus.PENDING)
+        self.db.refresh(self.wallet)
+        self.assertEqual(self.wallet.purchased_balance, 0)
+
+    def test_currency_mismatch(self):
+        payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": "bzx_123",
+                "amount": 150000,
+                "currency": "USD",  # USD instead of NGN
                 "id": 9999
             }
         }
@@ -286,3 +331,126 @@ class TestWebhooksAPI(unittest.TestCase):
         self.assertEqual(self.purchase.status, PurchaseStatus.PENDING)
         self.db.refresh(self.wallet)
         self.assertEqual(self.wallet.purchased_balance, 0)
+
+    def test_fulfillment_missing_wallet_auto_provisions(self):
+        # Remove wallet to simulate missing wallet scenario
+        self.db.delete(self.wallet)
+        self.db.commit()
+
+        payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": "bzx_123",
+                "amount": 150000,
+                "currency": "NGN",
+                "id": 9999,
+                "paid_at": "2026-03-30T10:00:00.000Z"
+            }
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = self._generate_signature(body)
+        response = self.client.post(
+            "/api/webhooks/paystack",
+            content=body,
+            headers={"x-paystack-signature": sig}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        # Verify in fresh session that wallet was auto-provisioned and credited
+        fresh_db = self.SessionLocal()
+        fresh_purchase = fresh_db.query(Purchase).filter(Purchase.payment_reference == "bzx_123").first()
+        self.assertEqual(fresh_purchase.status, PurchaseStatus.SUCCESS)
+        fresh_wallet = fresh_db.query(Wallet).filter(Wallet.user_id == self.user.id).first()
+        self.assertIsNotNone(fresh_wallet)
+        self.assertEqual(fresh_wallet.purchased_balance, 5000)
+        fresh_ledger = fresh_db.query(LedgerTransaction).filter(LedgerTransaction.wallet_id == fresh_wallet.id).first()
+        self.assertIsNotNone(fresh_ledger)
+        self.assertEqual(fresh_ledger.amount, 5000)
+        fresh_db.close()
+
+    def test_failed_purchase_recovery_via_webhook(self):
+        # A verified charge.success for a purchase in FAILED status must be safely recovered and credited
+        self.purchase.status = PurchaseStatus.FAILED
+        self.db.commit()
+
+        payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": "bzx_123",
+                "amount": 150000,
+                "currency": "NGN",
+                "id": 9999,
+                "paid_at": "2026-03-30T10:00:00.000Z"
+            }
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = self._generate_signature(body)
+        response = self.client.post(
+            "/api/webhooks/paystack",
+            content=body,
+            headers={"x-paystack-signature": sig}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        # Verify in fresh session that purchase transitioned to SUCCESS and wallet was credited
+        fresh_db = self.SessionLocal()
+        fresh_purchase = fresh_db.query(Purchase).filter(Purchase.payment_reference == "bzx_123").first()
+        self.assertEqual(fresh_purchase.status, PurchaseStatus.SUCCESS)
+        self.assertEqual(fresh_purchase.provider_transaction_id, "9999")
+        fresh_wallet = fresh_db.query(Wallet).filter(Wallet.user_id == self.user.id).first()
+        self.assertEqual(fresh_wallet.purchased_balance, 5000)
+        fresh_ledger = fresh_db.query(LedgerTransaction).filter(LedgerTransaction.wallet_id == fresh_wallet.id).first()
+        self.assertIsNotNone(fresh_ledger)
+        self.assertEqual(fresh_ledger.amount, 5000)
+        fresh_db.close()
+
+    def test_unknown_reference_returns_500(self):
+        # A verified charge.success for an unknown reference must NEVER return 200 uncredited; it must return 500
+        payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": "bzx_unknown_reference_999",
+                "amount": 150000,
+                "currency": "NGN",
+                "id": 8888,
+                "paid_at": "2026-03-30T10:00:00.000Z"
+            }
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = self._generate_signature(body)
+        response = self.client.post(
+            "/api/webhooks/paystack",
+            content=body,
+            headers={"x-paystack-signature": sig}
+        )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["message"], "Purchase reference not found")
+
+        # Verify wallet remains 0
+        fresh_db = self.SessionLocal()
+        fresh_wallet = fresh_db.query(Wallet).filter(Wallet.user_id == self.user.id).first()
+        self.assertEqual(fresh_wallet.purchased_balance, 0)
+        fresh_db.close()
+
+    @patch("app.api.webhooks.fulfill_purchase")
+    def test_recoverable_transient_failure_returns_500(self, mock_fulfill):
+        mock_fulfill.side_effect = AllocationTransientError("Transient DB lock")
+
+        payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": "bzx_123",
+                "amount": 150000,
+                "currency": "NGN",
+                "id": 9999
+            }
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = self._generate_signature(body)
+        response = self.client.post(
+            "/api/webhooks/paystack",
+            content=body,
+            headers={"x-paystack-signature": sig}
+        )
+        # Must return 500 so Paystack retries
+        self.assertEqual(response.status_code, 500)

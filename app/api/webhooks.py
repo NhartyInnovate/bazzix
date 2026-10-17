@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.dependencies import get_db
 from app.models.purchase import Purchase
-from app.services.allocation import fulfill_purchase, AllocationIdempotencyError, AllocationError
+from app.services.allocation import (
+    fulfill_purchase,
+    AllocationIdempotencyError,
+    AllocationError,
+    AllocationValidationError,
+    AllocationTransientError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +97,11 @@ async def paystack_webhook(
 
     purchase = db.query(Purchase).filter(Purchase.payment_reference == reference).first()
     if not purchase:
-        logger.info(f"Ignored Paystack webhook for unknown reference: {reference}")
-        return {"status": "success"}
+        logger.error(f"Paystack webhook received for unknown purchase reference: {reference}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Purchase reference not found"
+        )
 
     try:
         fulfill_purchase(
@@ -101,16 +110,27 @@ async def paystack_webhook(
             verified_amount=amount_whole,
             verified_currency=currency,
             provider_transaction_id=str(tx_id),
-            paid_at=paid_at_dt
+            paid_at=paid_at_dt,
+            allow_recovery=True
         )
+        db.commit()
         logger.info(f"Successfully fulfilled purchase via webhook. reference={reference}")
     except AllocationIdempotencyError:
+        db.rollback()
         logger.info(f"Ignored duplicate Paystack webhook for already fulfilled purchase. reference={reference}")
-    except AllocationError as e:
-        logger.error(f"AllocationError fulfilling purchase via webhook. reference={reference}, error={str(e)}")
-        # Do not throw 500, return 200 so Paystack stops retrying an invalid state (e.g., currency mismatch)
-        # But we don't grant the credits.
+        return {"status": "success"}
+    except AllocationValidationError as e:
+        db.rollback()
+        logger.error(f"Permanent validation error fulfilling purchase via webhook. reference={reference}, error={str(e)}")
+        # Return 200 so Paystack stops retrying a permanently invalid payload (e.g. amount/currency mismatch)
+        return {"status": "success"}
+    except AllocationTransientError as e:
+        db.rollback()
+        logger.error(f"Recoverable fulfillment failure via webhook. reference={reference}, error={str(e)}")
+        # Return 500 so Paystack retries the payload
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Fulfillment temporarily unavailable")
     except Exception as e:
+        db.rollback()
         logger.critical(f"Unexpected database failure fulfilling purchase via webhook. reference={reference}, error={str(e)}")
         # Return 500 so Paystack retries the payload
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database failure")

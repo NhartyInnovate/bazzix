@@ -8,6 +8,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import User
 
 from app.schemas.payment import CheckoutRequest, CheckoutResponse, PurchaseStatusResponse
+from app.models.purchase import Purchase, PurchaseStatus
 from app.services.catalog import get_credit_pack
 from app.services.allocation import initialize_purchase
 from app.services.paystack import PaystackProvider
@@ -47,7 +48,9 @@ def checkout(
             payment_provider="paystack",
             payment_reference=payment_reference
         )
+        db.commit()
     except Exception as e:
+        db.rollback()
         logger.error(f"Failed to initialize purchase: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -100,8 +103,6 @@ def get_purchase_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from app.models.purchase import Purchase
-    from app.schemas.payment import PurchaseStatusResponse
     purchase = db.query(Purchase).filter(
         Purchase.payment_reference == reference
     ).first()

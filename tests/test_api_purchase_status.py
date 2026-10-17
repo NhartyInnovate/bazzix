@@ -83,41 +83,41 @@ class TestPurchaseStatusAPI(unittest.TestCase):
 
     def test_status_pending(self):
         ref = self._create_purchase(self.user.id, PurchaseStatus.PENDING)
-        response = self.client.get(f"/api/payments/{ref}")
+        response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reference"], ref)
         self.assertEqual(response.json()["status"], "PENDING")
 
     def test_status_success(self):
         ref = self._create_purchase(self.user.id, PurchaseStatus.SUCCESS)
-        response = self.client.get(f"/api/payments/{ref}")
+        response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "SUCCESS")
 
     def test_status_failed(self):
         ref = self._create_purchase(self.user.id, PurchaseStatus.FAILED)
-        response = self.client.get(f"/api/payments/{ref}")
+        response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "FAILED")
 
     def test_other_user_purchase_returns_404(self):
         ref = self._create_purchase(self.other_user.id)
-        response = self.client.get(f"/api/payments/{ref}")
+        response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 404)
 
     def test_unknown_reference_returns_404(self):
-        response = self.client.get("/api/payments/bazzix_unknown")
+        response = self.client.get("/payments/bazzix_unknown")
         self.assertEqual(response.status_code, 404)
 
     def test_unauthenticated(self):
         ref = self._create_purchase(self.user.id)
         app.dependency_overrides.clear()
-        response = self.client.get(f"/api/payments/{ref}")
+        response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 401)
         
     def test_read_only_guarantee(self):
         ref = self._create_purchase(self.user.id, PurchaseStatus.PENDING)
-        response = self.client.get(f"/api/payments/{ref}")
+        response = self.client.get(f"/payments/{ref}")
         self.assertEqual(response.status_code, 200)
         
         # Verify purchase unchanged
