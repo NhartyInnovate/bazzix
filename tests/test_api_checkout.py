@@ -104,7 +104,7 @@ class TestCheckoutAPI(unittest.TestCase):
         self.assertEqual(purchase.user_id, self.user.id)
         # Verify provider called with exact snapshot values
         mock_provider.initialize_transaction.assert_called_once_with(
-            amount=100,
+            amount=1500,
             currency="NGN",
             email=self.user.email,
             reference=purchase.payment_reference,
@@ -173,7 +173,7 @@ class TestCheckoutAPI(unittest.TestCase):
             "event": "charge.success",
             "data": {
                 "reference": saved_ref,
-                "amount": 10000,
+                "amount": 150000,
                 "currency": "NGN",
                 "id": 7777,
                 "paid_at": "2026-03-30T10:00:00.000Z"
