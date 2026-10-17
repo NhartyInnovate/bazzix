@@ -39,7 +39,7 @@ class TestCatalog(unittest.TestCase):
 
     def test_small_pack_details(self):
         pack = get_credit_pack("credit_small")
-        self.assertEqual(pack.price_ngn, 1500)
+        self.assertEqual(pack.price_ngn, 100)
         self.assertEqual(pack.credit_amount, 5000)
 
     def test_mega_pack_details(self):

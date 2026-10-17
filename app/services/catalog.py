@@ -25,7 +25,7 @@ SUBSCRIPTION_PLANS: Dict[str, SubscriptionPlan] = {
 }
 
 CREDIT_PACKS: Dict[str, CreditPack] = {
-    "credit_small": CreditPack(id="credit_small", name="Small", price_ngn=1500, credit_amount=5000, is_active=True),
+    "credit_small": CreditPack(id="credit_small", name="Small", price_ngn=100, credit_amount=5000, is_active=True),
     "credit_medium": CreditPack(id="credit_medium", name="Medium", price_ngn=5000, credit_amount=20000, is_active=True),
     "credit_large": CreditPack(id="credit_large", name="Large", price_ngn=10000, credit_amount=50000, is_active=True),
     "credit_mega": CreditPack(id="credit_mega", name="Mega", price_ngn=25000, credit_amount=150000, is_active=True),
