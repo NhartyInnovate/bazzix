@@ -17,3 +17,6 @@ class ResetPasswordRequest(BaseModel):
     @classmethod
     def validate_new_password(cls, v: str) -> str:
         return validate_password_strength(v)
+
+class VerifyEmailRequest(BaseModel):
+    token: str

@@ -17,6 +17,7 @@ def me(current_user=Depends(get_current_user)):
         "last_name": current_user.last_name,
         "email": current_user.email,
         "role": current_user.role.name,
+        "is_verified": bool(current_user.is_verified) if current_user.is_verified is not None else False,
     }
 
 @router.get("/me/wallet")
