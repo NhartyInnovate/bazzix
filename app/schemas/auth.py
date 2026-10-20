@@ -20,3 +20,13 @@ class ResetPasswordRequest(BaseModel):
 
 class VerifyEmailRequest(BaseModel):
     token: str
+
+class GoogleAuthRequest(BaseModel):
+    credential: str = Field(..., min_length=1)
+
+    @field_validator('credential')
+    @classmethod
+    def validate_credential(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Credential cannot be empty.")
+        return v.strip()

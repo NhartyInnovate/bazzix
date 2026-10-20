@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+import secrets
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from google.auth.exceptions import GoogleAuthError
+from app.core.security import hash_password
+from app.services.account_provisioning import provision_new_user_account
 from app.schemas.auth import (
     LoginRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
     VerifyEmailRequest,
+    GoogleAuthRequest,
 )
 from app.core.auth import (
     create_access_token,
@@ -185,6 +193,161 @@ def login(
         {"sub": str(user.id)}
     )
 
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+    }
+
+
+@router.post("/google", dependencies=[Depends(rate_limiter(limit=10, window=60))])
+def google_auth(
+    data: GoogleAuthRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    if not settings.GOOGLE_CLIENT_ID:
+        logger.error("GOOGLE_CLIENT_ID is not configured.")
+        raise HTTPException(
+            status_code=500,
+            detail="Google authentication is not configured.",
+        )
+
+    try:
+        id_info = id_token.verify_oauth2_token(
+            data.credential,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID,
+        )
+    except (ValueError, GoogleAuthError) as e:
+        logger.warning(f"Google token verification failed: {type(e).__name__}")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Google credential.",
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error during Google token verification: {type(e).__name__}")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Google credential.",
+        )
+
+    # Validate issuer
+    issuer = id_info.get("iss")
+    if issuer not in ("accounts.google.com", "https://accounts.google.com"):
+        logger.warning(f"Google token rejected due to unexpected issuer: {issuer}")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Google credential.",
+        )
+
+    # Validate audience
+    if id_info.get("aud") != settings.GOOGLE_CLIENT_ID:
+        logger.warning("Google token audience mismatch.")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Google credential.",
+        )
+
+    # Validate email claim
+    email = id_info.get("email")
+    if not email or not isinstance(email, str) or not email.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Google account email is missing.",
+        )
+    email = email.strip().lower()
+
+    # Validate email verification claim
+    email_verified = id_info.get("email_verified")
+    if not (email_verified is True or email_verified == "true"):
+        raise HTTPException(
+            status_code=400,
+            detail="Google account email is not verified.",
+        )
+
+    user = get_user_by_email(db, email)
+
+    if user:
+        if not user.is_active:
+            raise HTTPException(
+                status_code=403,
+                detail="Account is disabled. Please contact support.",
+            )
+
+        if not user.is_verified:
+            try:
+                user.is_verified = True
+                db.commit()
+                db.refresh(user)
+                logger.info(f"Verified existing user account via Google auth for user_id={user.id}")
+            except Exception:
+                db.rollback()
+                raise
+    else:
+        # Extract names from Google claims
+        given_name = (id_info.get("given_name") or "").strip()
+        family_name = (id_info.get("family_name") or "").strip()
+        if not given_name:
+            full_name = (id_info.get("name") or "").strip()
+            if full_name:
+                parts = full_name.split(" ", 1)
+                given_name = parts[0]
+                if len(parts) > 1 and not family_name:
+                    family_name = parts[1]
+            else:
+                given_name = email.split("@")[0]
+
+        # Generate a high-entropy random password to fulfill NOT NULL database constraint
+        random_password = secrets.token_urlsafe(64)
+        hashed_pwd = hash_password(random_password)
+
+        new_user = User(
+            first_name=given_name,
+            last_name=family_name,
+            email=email,
+            hashed_password=hashed_pwd,
+            is_active=True,
+            is_verified=True,
+        )
+
+        try:
+            db.add(new_user)
+            db.flush()
+            provision_new_user_account(db, new_user.id)
+            db.commit()
+            db.refresh(new_user)
+            user = new_user
+            background_tasks.add_task(send_welcome_email, user.email)
+            logger.info(f"Created and provisioned new user via Google auth for user_id={user.id}")
+        except IntegrityError:
+            db.rollback()
+            try:
+                user = get_user_by_email(db, email)
+                if not user:
+                    logger.error("User creation failed on IntegrityError and user could not be retrieved.")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Database error during account creation.",
+                    )
+                if not user.is_active:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Account is disabled. Please contact support.",
+                    )
+                if not user.is_verified:
+                    user.is_verified = True
+                    db.commit()
+                    db.refresh(user)
+            except HTTPException:
+                raise
+            except Exception:
+                db.rollback()
+                raise
+        except Exception:
+            db.rollback()
+            raise
+
+    token = create_access_token({"sub": str(user.id)})
     return {
         "access_token": token,
         "token_type": "bearer",

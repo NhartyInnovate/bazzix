@@ -37,5 +37,8 @@ class Settings:
     # Payment Provider Configuration
     PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
 
+    # Google OAuth Configuration
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
 
 settings = Settings()
