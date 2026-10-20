@@ -32,6 +32,10 @@ def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email).first()
 
 
+def get_user_by_google_sub(db: Session, google_sub: str):
+    return db.query(User).filter(User.google_sub == google_sub).first()
+
+
 def authenticate_user(db: Session, email: str, password: str):
     user = get_user_by_email(db, email)
 

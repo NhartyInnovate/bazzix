@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.user import validate_password_strength
 
@@ -23,6 +24,7 @@ class VerifyEmailRequest(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     credential: str = Field(..., min_length=1)
+    mode: Literal["login", "register"] = "login"
 
     @field_validator('credential')
     @classmethod

@@ -26,6 +26,7 @@ from app.crud.user import (
     update_password,
     create_user,
     get_user_by_email,
+    get_user_by_google_sub,
     get_user_by_id,
 )
 from app.db.dependencies import get_db
@@ -265,25 +266,28 @@ def google_auth(
             detail="Google account email is not verified.",
         )
 
-    user = get_user_by_email(db, email)
+    # Validate Google subject identifier
+    google_sub = id_info.get("sub")
+    if not google_sub or not isinstance(google_sub, str) or not google_sub.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Google account identifier is missing.",
+        )
+    google_sub = google_sub.strip()
 
-    if user:
-        if not user.is_active:
+    if data.mode == "register":
+        # Check if an account already exists with this email or Google sub
+        existing_user = get_user_by_email(db, email)
+        if not existing_user:
+            existing_user = get_user_by_google_sub(db, google_sub)
+
+        if existing_user:
+            logger.info(f"Google registration rejected: account already exists for {email}")
             raise HTTPException(
-                status_code=403,
-                detail="Account is disabled. Please contact support.",
+                status_code=409,
+                detail="An account with this email already exists. Please sign in instead.",
             )
 
-        if not user.is_verified:
-            try:
-                user.is_verified = True
-                db.commit()
-                db.refresh(user)
-                logger.info(f"Verified existing user account via Google auth for user_id={user.id}")
-            except Exception:
-                db.rollback()
-                raise
-    else:
         # Extract names from Google claims
         given_name = (id_info.get("given_name") or "").strip()
         family_name = (id_info.get("family_name") or "").strip()
@@ -305,6 +309,7 @@ def google_auth(
             first_name=given_name,
             last_name=family_name,
             email=email,
+            google_sub=google_sub,
             hashed_password=hashed_pwd,
             is_active=True,
             is_verified=True,
@@ -321,31 +326,65 @@ def google_auth(
             logger.info(f"Created and provisioned new user via Google auth for user_id={user.id}")
         except IntegrityError:
             db.rollback()
-            try:
-                user = get_user_by_email(db, email)
-                if not user:
-                    logger.error("User creation failed on IntegrityError and user could not be retrieved.")
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Database error during account creation.",
-                    )
-                if not user.is_active:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Account is disabled. Please contact support.",
-                    )
-                if not user.is_verified:
-                    user.is_verified = True
-                    db.commit()
-                    db.refresh(user)
-            except HTTPException:
-                raise
-            except Exception:
-                db.rollback()
-                raise
+            # If concurrent registration created the account, report that it already exists
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Please sign in instead.",
+            )
         except Exception:
             db.rollback()
             raise
+
+    elif data.mode == "login":
+        user_by_email = get_user_by_email(db, email)
+        user_by_sub = get_user_by_google_sub(db, google_sub)
+
+        if not user_by_email and not user_by_sub:
+            # Never automatically create an account during Google sign-in
+            logger.info(f"Google sign-in rejected: no account found for {email}")
+            raise HTTPException(
+                status_code=404,
+                detail="No Bazzix account found for this Google email. Please create an account first.",
+            )
+
+        if user_by_email:
+            # Do not link an existing email/password account solely because its email matches
+            if not user_by_email.google_sub:
+                logger.warning(f"Google sign-in blocked: account {email} uses password authentication and is not linked.")
+                raise HTTPException(
+                    status_code=409,
+                    detail="This account was registered with an email and password. Please sign in with your email and password.",
+                )
+            if user_by_email.google_sub != google_sub:
+                logger.warning(f"Google sign-in blocked: sub mismatch for {email}.")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Google account identity mismatch.",
+                )
+            user = user_by_email
+        else:
+            user = user_by_sub
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=403,
+                detail="Account is disabled. Please contact support.",
+            )
+
+        if not user.is_verified:
+            try:
+                user.is_verified = True
+                db.commit()
+                db.refresh(user)
+                logger.info(f"Verified existing user account via Google auth for user_id={user.id}")
+            except Exception:
+                db.rollback()
+                raise
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid authentication mode.",
+        )
 
     token = create_access_token({"sub": str(user.id)})
     return {
