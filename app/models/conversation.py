@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -29,6 +29,16 @@ class Conversation(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_conversations_user_pinned_updated",
+            user_id,
+            is_pinned.desc(),
+            updated_at.desc(),
+            id.desc(),
+        ),
     )
 
     user = relationship(
