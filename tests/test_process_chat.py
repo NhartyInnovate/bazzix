@@ -192,6 +192,80 @@ class TestProcessChat(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("Conversation not found", str(ctx.exception))
 
+    @patch("app.services.title_generator.dispatch_background_title")
+    @patch("app.services.chat.structured_chat")
+    async def test_process_chat_db_backed_title_trigger_and_bounded_context(self, mock_chat, mock_title):
+        from datetime import datetime, timedelta, timezone
+        from app.models.message import Message
+        from app.services.context_manager import ContextManager
+        from app.services.prompt_builder import SYSTEM_PROMPT
+
+        mock_chat.return_value = (
+            "Assistant reply 1",
+            {
+                "provider_request_id": "req-db-1",
+                "prompt_tokens": 25,
+                "completion_tokens": 5,
+                "cached_tokens": 0,
+            },
+        )
+
+        # 1st message in empty conversation -> must trigger background title
+        await process_chat(
+            db=self.db,
+            user_id=self.user.id,
+            conversation_id=self.conv.id,
+            user_message="First user message",
+            client_request_id="req_db_first",
+        )
+        mock_title.assert_called_once_with(self.conv.id, "First user message")
+        mock_title.reset_mock()
+
+        # Seed additional messages so older messages overflow a tight token budget
+        base = datetime.now(timezone.utc) - timedelta(minutes=10)
+        for idx in range(10):
+            self.db.add(
+                Message(
+                    conversation_id=self.conv.id,
+                    role="user" if idx % 2 == 0 else "assistant",
+                    content=f"Historical turn {idx} " + ("detail " * 15),
+                    created_at=base + timedelta(seconds=idx),
+                )
+            )
+        self.db.commit()
+
+        with patch("app.core.config.settings.MAX_INPUT_TOKENS", 260):
+            await process_chat(
+                db=self.db,
+                user_id=self.user.id,
+                conversation_id=self.conv.id,
+                user_message="Follow-up question",
+                client_request_id="req_db_bounded",
+            )
+
+        # Must NOT trigger background title on subsequent messages
+        mock_title.assert_not_called()
+
+        # Verify the contents passed to structured_chat match the legacy full-history calculation
+        sent_contents = mock_chat.call_args[0][0]
+        all_msgs = (
+            self.db.query(Message)
+            .filter(Message.conversation_id == self.conv.id)
+            .order_by(Message.created_at.asc(), Message.id.asc())
+            .all()
+        )
+        # Exclude the assistant reply saved after structured_chat and the current user message
+        prior_before_reply = all_msgs[:-2]
+        raw_prior = [{"role": m.role, "content": m.content} for m in prior_before_reply]
+        expected_ctx = ContextManager(max_input_tokens=260).build_context(
+            SYSTEM_PROMPT, raw_prior, "Follow-up question"
+        )
+        expected_contents = expected_ctx["bounded_history"] + [
+            {"role": "user", "content": "Follow-up question"}
+        ]
+        self.assertEqual(sent_contents, expected_contents)
+        self.assertLess(len(expected_ctx["bounded_history"]), len(raw_prior))
+
 
 if __name__ == "__main__":
     unittest.main()

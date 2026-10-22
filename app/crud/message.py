@@ -135,3 +135,70 @@ def get_conversation_messages(
 ) -> list[Message]:
     messages, _, _ = get_conversation_messages_paginated(db, conversation_id)
     return messages
+
+
+def iter_conversation_messages_newest_first(
+    db: Session,
+    conversation_id: int,
+    batch_size: int = 200,
+):
+    """
+    Yield messages for a conversation in reverse canonical order
+    (created_at DESC, id DESC) in bounded batches using compound keyset pagination.
+
+    If the conversation contains any message with a NULL created_at timestamp,
+    falls back to reversing get_conversation_messages(db, conversation_id) so
+    that database-specific NULL ordering and all rows are preserved without omission.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+
+    has_null_timestamp = (
+        db.query(Message.id)
+        .filter(
+            Message.conversation_id == conversation_id,
+            Message.created_at.is_(None),
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+    if has_null_timestamp:
+        for msg in reversed(get_conversation_messages(db, conversation_id)):
+            yield msg
+        return
+
+    cursor_ts: datetime | None = None
+    cursor_id: int | None = None
+
+    while True:
+        query = db.query(Message).filter(Message.conversation_id == conversation_id)
+        if cursor_ts is not None and cursor_id is not None:
+            query = query.filter(
+                or_(
+                    Message.created_at < cursor_ts,
+                    and_(
+                        Message.created_at == cursor_ts,
+                        Message.id < cursor_id,
+                    ),
+                )
+            )
+
+        batch = (
+            query.order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(batch_size)
+            .all()
+        )
+
+        if not batch:
+            return
+
+        for msg in batch:
+            yield msg
+
+        if len(batch) < batch_size:
+            return
+
+        last_msg = batch[-1]
+        cursor_ts = last_msg.created_at
+        cursor_id = last_msg.id

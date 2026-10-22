@@ -55,6 +55,13 @@ class ContextManager:
         self.max_output_tokens = max_output_tokens or settings.MAX_OUTPUT_TOKENS
 
     def build_context(self, system_prompt: str, history: list[dict], user_message: str) -> dict:
+        return self.build_context_from_newest_first(
+            system_prompt=system_prompt,
+            newest_first_messages=reversed(history),
+            user_message=user_message,
+        )
+
+    def build_context_from_newest_first(self, system_prompt: str, newest_first_messages, user_message: str) -> dict:
         system_msg = {"role": "system", "content": system_prompt}
         user_msg = {"role": "user", "content": user_message}
         
@@ -65,7 +72,7 @@ class ContextManager:
         current_tokens = base_tokens
         
         # Traverse history backwards to retain the most recent context
-        for msg in reversed(history):
+        for msg in newest_first_messages:
             msg_tokens = estimate_message_tokens(msg)
             # If adding this message exceeds our input budget, we drop it and older messages
             if current_tokens + msg_tokens > self.max_input_tokens:

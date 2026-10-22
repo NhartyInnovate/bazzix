@@ -8,6 +8,8 @@ from app.crud.conversation import (
 from app.crud.message import (
     save_message,
     get_conversation_messages,
+    get_conversation_messages as _default_get_conversation_messages,
+    iter_conversation_messages_newest_first,
 )
 
 from app.services.ai import structured_chat, structured_chat_stream
@@ -18,6 +20,49 @@ import time
 
 
 import uuid
+
+
+def _load_bounded_chat_context(
+    db: Session,
+    conversation_id: int,
+    user_message: str,
+    system_prompt: str = SYSTEM_PROMPT,
+    context_manager=None,
+    batch_size: int = 200,
+) -> tuple[bool, dict]:
+    if get_conversation_messages is not _default_get_conversation_messages:
+        history = get_conversation_messages(
+            db,
+            conversation_id,
+        )
+        newest_first_iter = iter(reversed(history))
+    else:
+        newest_first_iter = iter_conversation_messages_newest_first(
+            db=db,
+            conversation_id=conversation_id,
+            batch_size=batch_size,
+        )
+
+    first = next(newest_first_iter, None)
+    second = next(newest_first_iter, None)
+    is_first_message = first is not None and second is None
+
+    if context_manager is None:
+        from app.services.context_manager import ContextManager
+        context_manager = ContextManager()
+
+    def _prior_messages_newest_first():
+        if second is not None:
+            yield {"role": second.role, "content": second.content}
+        for msg in newest_first_iter:
+            yield {"role": msg.role, "content": msg.content}
+
+    context_data = context_manager.build_context_from_newest_first(
+        system_prompt=system_prompt,
+        newest_first_messages=_prior_messages_newest_first(),
+        user_message=user_message,
+    )
+    return is_first_message, context_data
 
 
 async def process_chat(
@@ -52,27 +97,24 @@ async def process_chat(
         user_message,
     )
 
-    history = get_conversation_messages(
-        db,
-        conversation_id,
-    )
-
-    if len(history) == 1:
-        from app.services.title_generator import dispatch_background_title
-        dispatch_background_title(conversation_id, user_message)
-
     from app.services.context_manager import ContextManager
     from app.services.pricing import calculate_cost
     from app.services.credit_manager import reserve_credits, finalize_and_settle_credits
     from app.core.config import settings
 
     context_manager = ContextManager()
+    is_first_message, context_data = _load_bounded_chat_context(
+        db=db,
+        conversation_id=conversation_id,
+        user_message=user_message,
+        system_prompt=SYSTEM_PROMPT,
+        context_manager=context_manager,
+    )
 
-    raw_history = []
-    for msg in history[:-1]:
-        raw_history.append({"role": msg.role, "content": msg.content})
+    if is_first_message:
+        from app.services.title_generator import dispatch_background_title
+        dispatch_background_title(conversation_id, user_message)
 
-    context_data = context_manager.build_context(SYSTEM_PROMPT, raw_history, user_message)
     contents = context_data["bounded_history"] + [{"role": "user", "content": user_message}]
 
     # Calculate max required cost
@@ -185,28 +227,24 @@ async def process_chat_stream(
         user_message,
     )
 
-    history = get_conversation_messages(
-        db,
-        conversation_id,
-    )
-
-    if len(history) == 1:
-        from app.services.title_generator import dispatch_background_title
-        dispatch_background_title(conversation_id, user_message)
-
     from app.services.context_manager import ContextManager
     from app.services.pricing import calculate_cost
     from app.services.credit_manager import reserve_credits, finalize_and_settle_credits
     from app.core.config import settings
-    
+
     context_manager = ContextManager()
-    
-    # Map history to dicts for context manager
-    raw_history = []
-    for msg in history[:-1]:
-        raw_history.append({"role": msg.role, "content": msg.content})
-        
-    context_data = context_manager.build_context(SYSTEM_PROMPT, raw_history, user_message)
+    is_first_message, context_data = _load_bounded_chat_context(
+        db=db,
+        conversation_id=conversation_id,
+        user_message=user_message,
+        system_prompt=SYSTEM_PROMPT,
+        context_manager=context_manager,
+    )
+
+    if is_first_message:
+        from app.services.title_generator import dispatch_background_title
+        dispatch_background_title(conversation_id, user_message)
+
     contents = context_data["bounded_history"] + [{"role": "user", "content": user_message}]
     
     # Calculate max required cost

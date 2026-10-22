@@ -107,5 +107,72 @@ class TestProcessChatStream(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(log.provider_request_id)
         self.assertIsNone(log.usage_source)
 
+    @patch("app.services.title_generator.dispatch_background_title")
+    @patch("app.services.chat.structured_chat_stream")
+    async def test_stream_db_backed_title_trigger_and_bounded_context(self, mock_stream, mock_title):
+        from datetime import datetime, timedelta, timezone
+        from app.models.message import Message
+        from app.services.context_manager import ContextManager
+        from app.services.prompt_builder import SYSTEM_PROMPT
+
+        async def _gen1():
+            yield {"type": "content", "content": "Stream reply 1"}
+            yield {"type": "usage", "provider_request_id": "req-s1", "prompt_tokens": 20, "completion_tokens": 4}
+
+        mock_stream.return_value = _gen1()
+
+        # First message in conversation triggers title dispatch
+        gen1 = await process_chat_stream(self.db, self.user.id, self.conv.id, "First stream msg", "stream_req_first")
+        chunks1 = [c async for c in gen1]
+        self.assertEqual(chunks1, ["Stream reply 1"])
+        mock_title.assert_called_once_with(self.conv.id, "First stream msg")
+        mock_title.reset_mock()
+
+        # Seed messages so history overflows a tight budget
+        base = datetime.now(timezone.utc) - timedelta(minutes=10)
+        for idx in range(10):
+            self.db.add(
+                Message(
+                    conversation_id=self.conv.id,
+                    role="user" if idx % 2 == 0 else "assistant",
+                    content=f"Stream history {idx} " + ("word " * 15),
+                    created_at=base + timedelta(seconds=idx),
+                )
+            )
+        self.db.commit()
+
+        async def _gen2():
+            yield {"type": "content", "content": "Stream reply 2"}
+            yield {"type": "usage", "provider_request_id": "req-s2", "prompt_tokens": 30, "completion_tokens": 4}
+
+        mock_stream.return_value = _gen2()
+
+        with patch("app.core.config.settings.MAX_INPUT_TOKENS", 260):
+            gen2 = await process_chat_stream(
+                self.db, self.user.id, self.conv.id, "Second stream msg", "stream_req_bounded"
+            )
+            chunks2 = [c async for c in gen2]
+            self.assertEqual(chunks2, ["Stream reply 2"])
+
+        mock_title.assert_not_called()
+
+        sent_contents = mock_stream.call_args[0][0]
+        all_msgs = (
+            self.db.query(Message)
+            .filter(Message.conversation_id == self.conv.id)
+            .order_by(Message.created_at.asc(), Message.id.asc())
+            .all()
+        )
+        prior_before_reply = all_msgs[:-2]
+        raw_prior = [{"role": m.role, "content": m.content} for m in prior_before_reply]
+        expected_ctx = ContextManager(max_input_tokens=260).build_context(
+            SYSTEM_PROMPT, raw_prior, "Second stream msg"
+        )
+        expected_contents = expected_ctx["bounded_history"] + [
+            {"role": "user", "content": "Second stream msg"}
+        ]
+        self.assertEqual(sent_contents, expected_contents)
+        self.assertLess(len(expected_ctx["bounded_history"]), len(raw_prior))
+
 if __name__ == "__main__":
     unittest.main()
