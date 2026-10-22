@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
@@ -7,6 +7,7 @@ from app.schemas.conversation import (
     ConversationCreate,
     ConversationUpdate,
     ConversationResponse,
+    ConversationSearchResult,
 )
 from app.schemas.message import MessageResponse
 from app.services.conversation import (
@@ -16,6 +17,7 @@ from app.services.conversation import (
     delete_conversation,
     rename_conversation,
     update_conversation_fields,
+    search_conversations_service,
 )
 
 from app.crud.message import get_conversation_messages
@@ -50,6 +52,25 @@ def list_conversations(
     )
 
 
+@router.get("/search", response_model=list[ConversationSearchResult])
+def search_conversations(
+    q: str = Query("", description="Search query string"),
+    limit: int = Query(20, ge=1, le=100, description="Max conversations to return"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    clean_q = q.strip()
+    if not clean_q:
+        return []
+
+    return search_conversations_service(
+        db=db,
+        user_id=current_user.id,
+        query_str=clean_q,
+        limit=limit,
+    )
+
+
 @router.get("/{conversation_id}")
 def get_single_conversation(
     conversation_id: int,
@@ -74,6 +95,7 @@ def get_single_conversation(
         )
 
     return conversation
+
 
 @router.get(
     "/{conversation_id}/messages",
@@ -105,6 +127,7 @@ def get_messages(
         db,
         conversation_id,
     )
+
 
 @router.patch(
     "/{conversation_id}",
@@ -140,7 +163,7 @@ def rename_single_conversation(
         is_pinned=conversation_update.is_pinned,
     )
 
-    
+
 @router.delete("/{conversation_id}")
 def remove_conversation(
     conversation_id: int,
@@ -170,5 +193,5 @@ def remove_conversation(
     )
 
     return {
-        "message": "Conversation deleted successfully."
+        "message": "Conversation deleted successfully",
     }
