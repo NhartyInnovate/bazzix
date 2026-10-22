@@ -12,6 +12,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import User, RoleType
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.crud.message import encode_cursor, decode_cursor
 
 
 class TestConversationsAPI(unittest.TestCase):
@@ -291,3 +292,186 @@ class TestConversationsAPI(unittest.TestCase):
         ids = [item["id"] for item in res_alice.json()]
         self.assertIn(self.c1.id, ids)
         self.assertNotIn(self.c_user2.id, ids)
+
+    def test_get_conversation_messages_pagination_limit_only(self):
+        # Alice requests latest 2 messages out of 4
+        res = self.client.get(f"/conversations/{self.c1.id}/messages?limit=2")
+        self.assertEqual(res.status_code, 200)
+        messages = res.json()
+        self.assertEqual(len(messages), 2)
+
+        # Must be the latest 2 in chronological order: m3 then m4
+        self.assertEqual(messages[0]["id"], self.m3_lower_id.id)
+        self.assertEqual(messages[1]["id"], self.m4_higher_id.id)
+
+        # Headers indicate more older messages exist and provide next cursor
+        self.assertEqual(res.headers.get("x-has-more"), "true")
+        self.assertIsNotNone(res.headers.get("x-next-cursor"))
+
+    def test_get_conversation_messages_pagination_full_paging_via_cursor(self):
+        # Page 1: latest 2 messages
+        res1 = self.client.get(f"/conversations/{self.c1.id}/messages?limit=2")
+        self.assertEqual(res1.status_code, 200)
+        p1_messages = res1.json()
+        self.assertEqual(len(p1_messages), 2)
+        self.assertEqual(res1.headers.get("x-has-more"), "true")
+        cursor = res1.headers.get("x-next-cursor")
+        self.assertTrue(cursor)
+
+        # Page 2: next 2 older messages using cursor
+        res2 = self.client.get(f"/conversations/{self.c1.id}/messages?limit=2&cursor={cursor}")
+        self.assertEqual(res2.status_code, 200)
+        p2_messages = res2.json()
+        self.assertEqual(len(p2_messages), 2)
+        self.assertEqual(p2_messages[0]["id"], self.m1.id)
+        self.assertEqual(p2_messages[1]["id"], self.m2.id)
+
+        # No more older messages
+        self.assertEqual(res2.headers.get("x-has-more"), "false")
+        self.assertIsNone(res2.headers.get("x-next-cursor"))
+
+        # Reconstructed full history must match chronological order
+        full_ids = [m["id"] for m in (p2_messages + p1_messages)]
+        self.assertEqual(full_ids, [self.m1.id, self.m2.id, self.m3_lower_id.id, self.m4_higher_id.id])
+
+    def test_get_conversation_messages_pagination_via_before_id(self):
+        # Alice requests messages before m3 (id 1003)
+        res = self.client.get(f"/conversations/{self.c1.id}/messages?limit=2&before_id={self.m3_lower_id.id}")
+        self.assertEqual(res.status_code, 200)
+        messages = res.json()
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["id"], self.m1.id)
+        self.assertEqual(messages[1]["id"], self.m2.id)
+        self.assertEqual(res.headers.get("x-has-more"), "false")
+
+    def test_get_conversation_messages_pagination_identical_timestamps_boundary(self):
+        # Create a dedicated conversation with 5 messages, 3 of which share the identical timestamp
+        conv = Conversation(
+            id=301,
+            title="Boundary Test Chat",
+            is_pinned=False,
+            user_id=self.user1.id,
+        )
+        self.db.add(conv)
+        self.db.flush()
+
+        base_time = datetime.now(timezone.utc) - timedelta(hours=3)
+        shared_time = base_time + timedelta(minutes=5)
+
+        # m_b0 (earlier), m_b1, m_b2, m_b3 (shared_time), m_b4 (later)
+        msgs = [
+            Message(id=3000, conversation_id=conv.id, role="user", content="msg 0", created_at=base_time),
+            Message(id=3001, conversation_id=conv.id, role="assistant", content="msg 1", created_at=shared_time),
+            Message(id=3002, conversation_id=conv.id, role="user", content="msg 2", created_at=shared_time),
+            Message(id=3003, conversation_id=conv.id, role="assistant", content="msg 3", created_at=shared_time),
+            Message(id=3004, conversation_id=conv.id, role="user", content="msg 4", created_at=base_time + timedelta(minutes=10)),
+        ]
+        self.db.add_all(msgs)
+        self.db.commit()
+
+        # Page 1: limit 2
+        res1 = self.client.get(f"/conversations/{conv.id}/messages?limit=2")
+        self.assertEqual(res1.status_code, 200)
+        p1 = res1.json()
+        self.assertEqual([m["id"] for m in p1], [3003, 3004])
+        self.assertEqual(res1.headers.get("x-has-more"), "true")
+        c1 = res1.headers.get("x-next-cursor")
+
+        # Page 2: limit 2 with cursor (boundary inside shared_time messages)
+        res2 = self.client.get(f"/conversations/{conv.id}/messages?limit=2&cursor={c1}")
+        self.assertEqual(res2.status_code, 200)
+        p2 = res2.json()
+        self.assertEqual([m["id"] for m in p2], [3001, 3002])
+        self.assertEqual(res2.headers.get("x-has-more"), "true")
+        c2 = res2.headers.get("x-next-cursor")
+
+        # Page 3: limit 2 with cursor
+        res3 = self.client.get(f"/conversations/{conv.id}/messages?limit=2&cursor={c2}")
+        self.assertEqual(res3.status_code, 200)
+        p3 = res3.json()
+        self.assertEqual([m["id"] for m in p3], [3000])
+        self.assertEqual(res3.headers.get("x-has-more"), "false")
+
+        # Reconstructed full history must contain all 5 messages exactly once in order
+        all_ids = [m["id"] for m in (p3 + p2 + p1)]
+        self.assertEqual(all_ids, [3000, 3001, 3002, 3003, 3004])
+
+    def test_get_conversation_messages_pagination_fewer_than_limit(self):
+        res = self.client.get(f"/conversations/{self.c1.id}/messages?limit=10")
+        self.assertEqual(res.status_code, 200)
+        messages = res.json()
+        self.assertEqual(len(messages), 4)
+        self.assertEqual(res.headers.get("x-has-more"), "false")
+        self.assertIsNone(res.headers.get("x-next-cursor"))
+
+    def test_get_conversation_messages_pagination_empty(self):
+        res = self.client.get(f"/conversations/{self.c5_empty.id}/messages?limit=10")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), [])
+        self.assertEqual(res.headers.get("x-has-more"), "false")
+        self.assertIsNone(res.headers.get("x-next-cursor"))
+
+    def test_get_conversation_messages_pagination_invalid_cursor(self):
+        res = self.client.get(f"/conversations/{self.c1.id}/messages?limit=10&cursor=invalid_base64_cursor!!")
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json().get("message"), "Invalid pagination cursor")
+
+    def test_get_conversation_messages_pagination_invalid_before_id(self):
+        res = self.client.get(f"/conversations/{self.c1.id}/messages?limit=10&before_id=999999")
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json().get("message"), "Message anchor not found")
+
+    def test_get_conversation_messages_pagination_invalid_limit(self):
+        res_zero = self.client.get(f"/conversations/{self.c1.id}/messages?limit=0")
+        self.assertEqual(res_zero.status_code, 422)
+
+        res_over = self.client.get(f"/conversations/{self.c1.id}/messages?limit=101")
+        self.assertEqual(res_over.status_code, 422)
+
+    def test_get_conversation_messages_pagination_cross_user_before_id(self):
+        # Alice attempts to use Bob's message (m_user2: 2001) as anchor for her conversation
+        res = self.client.get(f"/conversations/{self.c1.id}/messages?limit=2&before_id={self.m_user2.id}")
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json().get("message"), "Message anchor not found")
+
+    def test_get_conversation_messages_pagination_user_isolation(self):
+        # Alice attempts to paginate Bob's conversation
+        res = self.client.get(f"/conversations/{self.c_user2.id}/messages?limit=10")
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json().get("message"), "Access denied")
+
+
+class TestCursorEncoding(unittest.TestCase):
+    def test_encode_and_decode_round_trip_utc(self):
+        dt = datetime(2026, 10, 22, 12, 30, 45, 123456, tzinfo=timezone.utc)
+        msg_id = 4294967
+        cursor = encode_cursor(dt, msg_id)
+        self.assertIsInstance(cursor, str)
+        self.assertNotIn("=", cursor)  # Stripped padding
+
+        decoded_dt, decoded_id = decode_cursor(cursor)
+        self.assertEqual(decoded_dt, dt)
+        self.assertEqual(decoded_id, msg_id)
+
+    def test_encode_and_decode_round_trip_naive(self):
+        dt = datetime(2026, 10, 22, 12, 30, 45, 0)
+        msg_id = 101
+        cursor = encode_cursor(dt, msg_id)
+
+        decoded_dt, decoded_id = decode_cursor(cursor)
+        self.assertEqual(decoded_dt, dt)
+        self.assertEqual(decoded_id, msg_id)
+
+    def test_decode_invalid_inputs(self):
+        invalid_cases = [
+            "",
+            "!!!invalid-base64???",
+            "bm93",  # base64 "now" with no pipe
+            "YWJjfDEyMw",  # "abc|123" with invalid isoformat
+            "MjAyNi0xMC0yMnxub3RfYW5faW50",  # "2026-10-22|not_an_int"
+        ]
+        for bad in invalid_cases:
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError) as ctx:
+                    decode_cursor(bad)
+                self.assertIn("Invalid pagination cursor", str(ctx.exception))

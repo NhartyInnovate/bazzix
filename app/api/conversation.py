@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
@@ -20,7 +20,10 @@ from app.services.conversation import (
     search_conversations_service,
 )
 
-from app.crud.message import get_conversation_messages
+from app.crud.message import (
+    get_conversation_messages,
+    get_conversation_messages_paginated,
+)
 
 router = APIRouter(
     prefix="/conversations",
@@ -103,6 +106,10 @@ def get_single_conversation(
 )
 def get_messages(
     conversation_id: int,
+    limit: int | None = Query(None, ge=1, le=100, description="Max messages to return (1-100)"),
+    cursor: str | None = Query(None, description="Cursor for pagination"),
+    before_id: int | None = Query(None, ge=1, description="Older message ID anchor for pagination"),
+    response: Response = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -123,10 +130,26 @@ def get_messages(
             detail="Access denied",
         )
 
-    return get_conversation_messages(
-        db,
-        conversation_id,
-    )
+    try:
+        messages, has_more, next_cursor = get_conversation_messages_paginated(
+            db=db,
+            conversation_id=conversation_id,
+            limit=limit,
+            cursor=cursor,
+            before_id=before_id,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    if response is not None and (limit is not None or cursor is not None or before_id is not None):
+        response.headers["X-Has-More"] = "true" if has_more else "false"
+        if next_cursor:
+            response.headers["X-Next-Cursor"] = next_cursor
+
+    return messages
 
 
 @router.patch(
